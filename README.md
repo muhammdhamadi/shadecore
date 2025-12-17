@@ -64,6 +64,11 @@ This will:
 - launch the renderer
 - expose a Syphon server immediately
 
+#### Hotkeys
+1 = FBO Texture Output
+2 = Syphon
+3 = PLACEHOLDER
+
 ---
 
 ## Project Structure

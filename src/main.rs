@@ -23,6 +23,7 @@ use std::time::Instant;
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowBuilder};
 
 /// ===============================
@@ -42,6 +43,92 @@ use winit::window::{Window, WindowBuilder};
 /// IMPORTANT:
 /// - Syphon is macOS-only.
 /// - You must supply vendor/Syphon.framework for this to link (see README).
+
+/// -------------------------------
+/// Output routing
+/// -------------------------------
+/// Users sometimes want the "final output" as a texture (for downstream use),
+/// or routed to a platform-specific sharing API (Syphon / Spout).
+///
+/// Today:
+/// - Texture: just render to our FBO texture and present it in-window.
+/// - Syphon: publish the same texture ID to Syphon (macOS).
+/// - Spout: placeholder (no implementation yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum OutputMode {
+    Texture,
+    Syphon,
+    Spout,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct OutputConfigFile {
+    /// "texture" | "syphon" | "spout"
+    #[serde(default = "default_output_mode")]
+    output_mode: OutputMode,
+
+    #[serde(default)]
+    syphon: SyphonCfg,
+
+    #[serde(default)]
+    spout: SpoutCfg,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SyphonCfg {
+    #[serde(default = "default_true")]
+    enabled: bool,
+
+    /// Optional Syphon server name shown to clients.
+    #[serde(default)]
+    server_name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SpoutCfg {
+    /// Placeholder; unused until Spout implementation lands.
+    #[serde(default)]
+    enabled: bool,
+}
+
+fn default_true() -> bool { true }
+
+fn default_output_mode() -> OutputMode { OutputMode::Texture }
+
+impl Default for SyphonCfg {
+    fn default() -> Self {
+        Self { enabled: true, server_name: None }
+    }
+}
+impl Default for SpoutCfg {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
+}
+
+fn load_output_config(path: &std::path::Path, default_mode: OutputMode) -> OutputConfigFile {
+    // If file missing or invalid, fall back to defaults (never crash startup).
+    let default_cfg = OutputConfigFile {
+        output_mode: default_mode,
+        syphon: SyphonCfg::default(),
+        spout: SpoutCfg::default(),
+    };
+
+    let data = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return default_cfg,
+    };
+
+    match serde_json::from_str::<OutputConfigFile>(&data) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("Failed to parse output config ({}): {}. Using defaults.", path.display(), e);
+            default_cfg
+        }
+    }
+}
+
 
 // Fullscreen triangle vertex shader (same as earlier segments)
 const VERT_SRC: &str = r#"#version 330 core
@@ -382,11 +469,13 @@ fn main() {
     let frag_path = assets.join("shaders").join("default.frag");
     let present_frag_path = assets.join("shaders").join("present.frag");
     let params_path = assets.join("params.json");
+    let output_cfg_path = assets.join("output.json");
 
     println!("Assets base: {}", assets.display());
     println!("Frag shader: {}", frag_path.display());
     println!("Present shader: {}", present_frag_path.display());
     println!("Params JSON: {}", params_path.display());
+    println!("Output JSON: {}", output_cfg_path.display());
 
     let frag_src = read_to_string(&frag_path);
     let present_frag_src = read_to_string(&present_frag_path);
@@ -400,9 +489,21 @@ fn main() {
     // ---------------------------
     let event_loop = EventLoop::new().expect("Failed to create EventLoop");
 
+    // Default output mode:
+    // - macOS: Syphon is available, so default to Syphon
+    // - others: default to Texture (no platform sharing)
+    let default_mode = if cfg!(target_os = "macos") {
+        OutputMode::Syphon
+    } else {
+        OutputMode::Texture
+    };
+
     let window_builder = Some(
         WindowBuilder::new()
-            .with_title("GLSL Engine – Segment 4 (Syphon + MIDI + JSON Params)")
+            .with_title(format!(
+                "shadecore – output: {:?} (press 1=Texture, 2=Syphon, 3=Spout)",
+                default_mode
+            ))
             .with_inner_size(PhysicalSize::new(1280, 720)),
     );
 
@@ -488,16 +589,25 @@ fn main() {
     // MIDI connect
     let _midi_conn_in = connect_midi(&params_file, store.clone());
 
-    // Syphon server (macOS only)
+    // Current output mode + platform outputs
+    let output_cfg = load_output_config(&output_cfg_path, default_mode);
+let syphon_name = output_cfg
+    .syphon
+    .server_name
+    .clone()
+    .unwrap_or_else(|| "shadecore".to_string());
+let syphon_enabled = output_cfg.syphon.enabled;
+let mut output_mode = output_cfg.output_mode;
+    window.set_title(&format!("shadecore – output: {:?} (press 1=Texture, 2=Syphon, 3=Spout)", output_mode));
+
+
+
+    // Syphon server is created lazily (only if/when mode=Syphon)
     #[cfg(target_os = "macos")]
-    let syphon = {
-        // Create AFTER GL context is current.
-        // SyphonOpenGLServer init uses [NSOpenGLContext currentContext] internally.
-        SyphonServer::new("glsl_engine").or_else(|| {
-            println!("Syphon server create failed (is Syphon.framework present?)");
-            None
-        })
-    };
+    let mut syphon: Option<SyphonServer> = None;
+
+    // Spout placeholder: intentionally unimplemented today.
+    let mut spout_warned = false;
 
     let start = Instant::now();
 
@@ -507,6 +617,34 @@ fn main() {
         match event {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => target.exit(),
+                WindowEvent::KeyboardInput { event, .. } => {
+                    // Output routing hotkeys:
+                    //   1 = Texture
+                    //   2 = Syphon
+                    //   3 = Spout (placeholder)
+                    if event.state.is_pressed() {
+                        if let PhysicalKey::Code(code) = event.physical_key {
+                            let new_mode = match code {
+    KeyCode::Digit1 | KeyCode::Numpad1 => Some(OutputMode::Texture),
+    KeyCode::Digit2 | KeyCode::Numpad2 => Some(OutputMode::Syphon),
+    KeyCode::Digit3 | KeyCode::Numpad3 => Some(OutputMode::Spout),
+    _ => None,
+};
+
+
+                            if let Some(m) = new_mode {
+                                if m != output_mode {
+                                    output_mode = m;
+                                    window.set_title(&format!(
+                                        "shadecore – output: {:?} (press 1=Texture, 2=Syphon, 3=Spout)",
+                                        output_mode
+                                    ));
+                                    println!("Output mode set to: {:?}", output_mode);
+                                }
+                            }
+                        }
+                    }
+                }
                 WindowEvent::Resized(new_size) => {
                     let w = NonZeroU32::new(new_size.width.max(1)).unwrap();
                     let h = NonZeroU32::new(new_size.height.max(1)).unwrap();
@@ -569,11 +707,58 @@ fn main() {
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
                     // ---------------------------
-                    // Publish to Syphon (macOS only)
+                    // Output routing
                     // ---------------------------
-                    #[cfg(target_os = "macos")]
-                    if let Some(ref srv) = syphon {
-                    srv.publish_texture(rt.tex.0.get(), w, h);
+                    match output_mode {
+                        OutputMode::Texture => {
+                            // No-op: the final output *is* rt.tex.
+                            // (This is the texture users can treat as the engine's final output.)
+                        }
+
+                        OutputMode::Syphon => {
+                            // Publish to Syphon (macOS only)
+                            #[cfg(target_os = "macos")]
+                            {
+if !syphon_enabled {
+    // Config says Syphon is disabled; behave like Texture.
+    if !spout_warned {
+        println!("Syphon output requested but disabled in output.json. Falling back to Texture.");
+        spout_warned = true;
+    }
+} else {
+
+                                if syphon.is_none() {
+                                    // Create AFTER GL context is current.
+                                    // SyphonOpenGLServer init uses [NSOpenGLContext currentContext] internally.
+                                    syphon = SyphonServer::new(&syphon_name).or_else(|| {
+                                        println!("Syphon server create failed (is Syphon.framework present?)");
+                                        None
+                                    });
+                                }
+
+                                if let Some(ref srv) = syphon {
+                                    srv.publish_texture(rt.tex.0.get(), w, h);
+                                }
+                            }
+
+                            
+                                }
+#[cfg(not(target_os = "macos"))]
+                            {
+                                if !spout_warned {
+                                    println!("Syphon output requested, but Syphon is macOS-only. Falling back to Texture.");
+                                    spout_warned = true;
+                                }
+                            }
+                        }
+
+                        OutputMode::Spout => {
+                            // Placeholder until Windows Spout sender is implemented.
+                            if !spout_warned {
+                                println!("Spout output is not implemented yet (placeholder). Falling back to Texture.");
+                                spout_warned = true;
+                            }
+                        }
                     }
 
                     // ---------------------------
