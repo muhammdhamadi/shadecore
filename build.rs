@@ -1,29 +1,46 @@
 // build.rs
 //
-// This build script does four things (macOS only):
-// 1) Compiles our Objective‑C Syphon bridge (native/syphon_bridge.m) into a static lib.
+// macOS (unchanged):
+// 1) Compiles our Objective-C Syphon bridge (native/syphon_bridge.m) into a static lib.
 // 2) Links against the Syphon.framework we vendor inside this repo (vendor/Syphon.framework).
 // 3) Adds an LC_RPATH so the runtime loader can actually *find* Syphon.framework when you run
 //    `cargo run` (or any raw executable build).
 // 4) Copies vendor/Syphon.framework into target/{debug|release}/Syphon.framework so the rpath
 //    we add will resolve correctly.
 //
-// Why this is needed:
-// - Our Rust binary references Syphon as: @rpath/Syphon.framework/Versions/A/Syphon
-// - If the binary has *no* rpaths, dyld can’t resolve @rpath and you get:
-//     "Reason: no LC_RPATH's found"
+// Windows (added):
+// - Builds a C++ Spout bridge (native/spout_bridge) via CMake and links against spout_bridge.
 //
-// For app-bundle distribution later, we’ll instead copy Syphon.framework into:
-//   MyApp.app/Contents/Frameworks/Syphon.framework
-// and rely on the rpath @executable_path/../Frameworks (we also add that here).
+// NOTE:
+// - We key off CARGO_CFG_TARGET_OS (the *target*), not the host OS.
+// - This means: macOS builds only run Syphon; Windows builds only run Spout.
+// - Nothing here overwrites your Syphon wiring; it remains intact.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    // Only do Syphon wiring on macOS. Other platforms should compile fine without it.
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+    // Re-run if build script changes
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+    println!("cargo:rerun-if-env-changed=PROFILE");
+    println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
+
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    // -------------------------
+    // Windows: Spout bridge build (ADDED)
+    // -------------------------
+    if target_os == "windows" {
+        build_spout_bridge();
+        return;
+    }
+
+    // -------------------------
+    // macOS: Syphon wiring (UNCHANGED)
+    // -------------------------
+    if target_os != "macos" {
         return;
     }
 
@@ -107,6 +124,49 @@ fn main() {
         copy_dir_recursive(&syphon_framework, &dest_dir)
             .unwrap_or_else(|e| panic!("Failed to copy Syphon.framework -> {}: {e}", dest_dir.display()));
     }
+}
+
+/// Windows-only: build and link the Spout bridge via CMake.
+///
+/// Expected layout:
+///   native/spout_bridge/CMakeLists.txt
+///   native/spout_bridge/spout_bridge.cpp
+///   native/spout_bridge/spout_bridge.h
+///   native/spout2/... (vendored Spout2 SDK subset)
+///
+/// Output:
+///   - builds spout_bridge (DLL + import lib) and links it to your Rust crate.
+fn build_spout_bridge() {
+    // Rebuild if these change
+    println!("cargo:rerun-if-changed=native/spout_bridge/CMakeLists.txt");
+    println!("cargo:rerun-if-changed=native/spout_bridge/spout_bridge.cpp");
+    println!("cargo:rerun-if-changed=native/spout_bridge/spout_bridge.h");
+    println!("cargo:rerun-if-changed=native/spout2");
+
+    // Build the C++ bridge
+    let dst = cmake::build("native/spout_bridge");
+
+    // CMake crate commonly outputs libs under dst/lib (but can vary),
+    // so we add a few likely candidates.
+    let candidates = [
+        dst.join("lib"),
+        dst.join("build"),
+        dst.join("build").join("lib"),
+        dst.clone(),
+    ];
+
+    for p in candidates.iter() {
+        println!("cargo:rustc-link-search=native={}", p.display());
+    }
+
+    // Link against spout_bridge
+    println!("cargo:rustc-link-lib=dylib=spout_bridge");
+
+    // (Optional but often useful) also link core Win/OpenGL libs if your bridge needs them.
+    // If your CMakeLists already links these, you can remove these lines safely.
+    println!("cargo:rustc-link-lib=dylib=opengl32");
+    println!("cargo:rustc-link-lib=dylib=user32");
+    println!("cargo:rustc-link-lib=dylib=gdi32");
 }
 
 /// Recursively copy a directory (framework bundles are directories).
