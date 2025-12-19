@@ -1,189 +1,118 @@
 // build.rs
 //
-// macOS (unchanged):
-// 1) Compiles our Objective-C Syphon bridge (native/syphon_bridge.m) into a static lib.
+// This build script does four things (macOS only):
+// 1) Compiles our Objective‑C Syphon bridge (native/syphon_bridge.m) into a static lib.
 // 2) Links against the Syphon.framework we vendor inside this repo (vendor/Syphon.framework).
 // 3) Adds an LC_RPATH so the runtime loader can actually *find* Syphon.framework when you run
 //    `cargo run` (or any raw executable build).
 // 4) Copies vendor/Syphon.framework into target/{debug|release}/Syphon.framework so the rpath
 //    we add will resolve correctly.
 //
-// Windows (added):
-// - Builds a C++ Spout bridge (native/spout_bridge) via CMake and links against spout_bridge.
+// Why this is needed:
+// - Our Rust binary references Syphon as: @rpath/Syphon.framework/Versions/A/Syphon
+// - If the binary has *no* rpaths, dyld can’t resolve @rpath and you get:
+//     "Reason: no LC_RPATH's found"
 //
-// NOTE:
-// - We key off CARGO_CFG_TARGET_OS (the *target*), not the host OS.
-// - This means: macOS builds only run Syphon; Windows builds only run Spout.
-// - Nothing here overwrites your Syphon wiring; it remains intact.
+// For app-bundle distribution later, we’ll instead copy Syphon.framework into:
+//   MyApp.app/Contents/Frameworks/Syphon.framework
+// and rely on the rpath @executable_path/../Frameworks (we also add that here).
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    // Re-run if build script changes
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
-    println!("cargo:rerun-if-env-changed=PROFILE");
-    println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
-
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_else(|_| "unknown".into());
-
-    // -------------------------
-    // macOS: Syphon wiring (your original behavior)
-    // -------------------------
-    if target_os == "macos" {
-        // Rebuild if these change
-        println!("cargo:rerun-if-changed=native/syphon_bridge.m");
-        println!("cargo:rerun-if-changed=native/syphon_bridge.h");
-        println!("cargo:rerun-if-changed=vendor/Syphon.framework");
-
-        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        let vendor_dir = manifest_dir.join("vendor");
-        let syphon_framework = vendor_dir.join("Syphon.framework");
-
-        if !syphon_framework.exists() {
-            panic!(
-                "Syphon.framework not found at {}. Did you vendor it in /vendor?",
-                syphon_framework.display()
-            );
-        }
-
-        // -------------------------
-        // 1) Compile the ObjC bridge into libsyphon_bridge.a
-        // -------------------------
-        let mut cc_build = cc::Build::new();
-        cc_build
-            .file("native/syphon_bridge.m")
-            .flag("-fobjc-arc")
-            .flag("-ObjC")
-            .include(syphon_framework.join("Headers"))
-            // Some Syphon distributions also have Headers under Versions/A/Headers
-            .include(syphon_framework.join("Versions/A/Headers"))
-            // Allow finding frameworks via -F
-            .flag(&format!("-F{}", vendor_dir.display()))
-            // Silence noisy deprecation warnings (optional; remove if you want them visible)
-            .flag("-Wno-deprecated-declarations");
-
-        cc_build.compile("syphon_bridge"); // -> libsyphon_bridge.a
-
-        // -------------------------
-        // 2) Link against Syphon.framework + required Apple frameworks
-        // -------------------------
-        println!("cargo:rustc-link-search=framework={}", vendor_dir.display());
-        println!("cargo:rustc-link-lib=framework=Syphon");
-        println!("cargo:rustc-link-lib=framework=Cocoa");
-        println!("cargo:rustc-link-lib=framework=OpenGL");
-
-        // -------------------------
-        // 3) Add runtime rpaths so dyld can resolve @rpath/Syphon.framework/...
-        // -------------------------
-        //
-        // We add:
-        //   -Wl,-rpath,@executable_path
-        // so the loader looks next to the executable for Syphon.framework.
-        //
-        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
-
-        // -------------------------
-        // 4) Copy Syphon.framework into target/<profile>/Syphon.framework
-        // -------------------------
-        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".into());
-
-        // Respect CARGO_TARGET_DIR if set, otherwise default to <manifest>/target
-        let target_dir = env::var("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| manifest_dir.join("target"));
-
-        let dest_dir = target_dir.join(&profile).join("Syphon.framework");
-
-        // Copy only if missing (your original heuristic)
-        if !dest_dir.exists() {
-            copy_dir_recursive(&syphon_framework, &dest_dir).unwrap_or_else(|e| {
-                panic!(
-                    "Failed to copy Syphon.framework -> {}: {e}",
-                    dest_dir.display()
-                )
-            });
-        }
+    // Only do Syphon wiring on macOS. Other platforms should compile fine without it.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
     }
 
+    // Rebuild if these change
+    println!("cargo:rerun-if-changed=native/syphon_bridge.m");
+    println!("cargo:rerun-if-changed=native/syphon_bridge.h");
+    println!("cargo:rerun-if-changed=vendor/Syphon.framework");
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let vendor_dir = manifest_dir.join("vendor");
+    let syphon_framework = vendor_dir.join("Syphon.framework");
+
+    // IMPORTANT: Syphon is OPTIONAL.
+    // If the framework isn't vendored, we still want the project to build and run on macOS.
+    // (You'll just lose Syphon output and fall back to Texture.)
+    if !syphon_framework.exists() {
+        println!(
+            "cargo:warning=Syphon.framework not found at {} — building WITHOUT Syphon support (Texture-only on macOS).",
+            syphon_framework.display()
+        );
+        return;
+    }
+
+    // Tell Rust code that Syphon is actually available in this build.
+    println!("cargo:rustc-cfg=has_syphon");
+
     // -------------------------
-    // Windows: Spout bridge (CMake)
+    // 1) Compile the ObjC bridge into libsyphon_bridge.a
     // -------------------------
-    if target_os == "windows" {
-        // Rebuild triggers
-        println!("cargo:rerun-if-changed=native/spout_bridge/CMakeLists.txt");
-        println!("cargo:rerun-if-changed=native/spout_bridge/spout_bridge.cpp");
-        println!("cargo:rerun-if-changed=native/spout_bridge/spout_bridge.h");
-        println!("cargo:rerun-if-changed=native/spout2");
+    let mut cc_build = cc::Build::new();
+    cc_build
+        .file("native/syphon_bridge.m")
+        .flag("-fobjc-arc")
+        .flag("-ObjC")
+        .include(syphon_framework.join("Headers"))
+        // Some Syphon distributions also have Headers under Versions/A/Headers
+        .include(syphon_framework.join("Versions/A/Headers"))
+        // Allow finding frameworks via -F
+        .flag(&format!("-F{}", vendor_dir.display()))
+        // Silence noisy deprecation warnings (optional; remove if you want them visible)
+        .flag("-Wno-deprecated-declarations");
 
-        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".into());
+    cc_build.compile("syphon_bridge"); // -> libsyphon_bridge.a
 
-        // MSVC multi-config expects Debug/Release folders
-        let cmake_cfg = if profile.eq_ignore_ascii_case("release") {
-            "Release"
-        } else {
-            "Debug"
-        };
+    // -------------------------
+    // 2) Link against Syphon.framework + required Apple frameworks
+    // -------------------------
+    println!("cargo:rustc-link-search=framework={}", vendor_dir.display());
+    println!("cargo:rustc-link-lib=framework=Syphon");
+    println!("cargo:rustc-link-lib=framework=Cocoa");
+    println!("cargo:rustc-link-lib=framework=OpenGL");
 
-        // Path to spout2 sources you vendored/downloaded
-        let spout2_dir = manifest_dir.join("native").join("spout2");
-        if !spout2_dir.exists() {
-            panic!(
-                "Spout2 source dir not found at {}. Expected native/spout2 to exist.",
-                spout2_dir.display()
-            );
-        }
+    // -------------------------
+    // 3) Add runtime rpaths so dyld can resolve @rpath/Syphon.framework/...
+    // -------------------------
+    //
+    // We add TWO rpaths:
+    // - @executable_path : so `cargo run` works if Syphon.framework sits next to the binary
+    // - @executable_path/../Frameworks : so future .app bundles can place frameworks in Contents/Frameworks
+    //
+    // IMPORTANT: rustc-link-arg is stable and works across profiles.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
 
-        // Build the spout_bridge target (NOT 'install' — that caused install.vcxproj failure)
-        let mut cfg = cmake::Config::new("native/spout_bridge");
-        cfg.define("SPOUT2_DIR", spout2_dir.to_string_lossy().to_string());
-        cfg.profile(cmake_cfg);
-        cfg.build_target("spout_bridge");
+    // -------------------------
+    // 4) Copy Syphon.framework next to the built binary for `cargo run`
+    // -------------------------
+    //
+    // Cargo puts the executable at:
+    //   <workspace>/target/<profile>/glsl_engine
+    //
+    // So we copy:
+    //   vendor/Syphon.framework -> target/<profile>/Syphon.framework
+    //
+    // Then @executable_path (the directory containing the binary) is also the directory
+    // containing Syphon.framework, and dyld can resolve @rpath/Syphon.framework...
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".into());
 
-        let dst = cfg.build();
+    // Respect CARGO_TARGET_DIR if set, otherwise default to <manifest>/target
+    let target_dir = env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| manifest_dir.join("target"));
 
-        // cmake crate output layout for VS generators:
-        // <dst>/build/<Debug|Release> contains:
-        //   - spout_bridge.lib (import library)
-        //   - spout_bridge.dll (runtime)
-        let bin_lib_dir = dst.join("build").join(cmake_cfg);
+    let dest_dir = target_dir.join(&profile).join("Syphon.framework");
 
-        println!("cargo:rustc-link-search=native={}", bin_lib_dir.display());
-        // Link against the DLL import lib (not a static lib)
-        println!("cargo:rustc-link-lib=dylib=spout_bridge");
-
-        // Ensure spout_bridge.dll is beside the final exe (cargo run).
-        let dll_path = bin_lib_dir.join("spout_bridge.dll");
-        if dll_path.exists() {
-            let target_dir = env::var("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| manifest_dir.join("target"));
-            let profile_dir = if profile.to_lowercase() == "release" {
-                target_dir.join("release")
-            } else {
-                target_dir.join("debug")
-            };
-            let out_dll = profile_dir.join("spout_bridge.dll");
-            let _ = fs::create_dir_all(&profile_dir);
-            let _ = fs::copy(&dll_path, &out_dll);
-            // Also copy to deps/ for some cargo invocations
-            let deps_dir = profile_dir.join("deps");
-            let _ = fs::create_dir_all(&deps_dir);
-            let _ = fs::copy(&dll_path, deps_dir.join("spout_bridge.dll"));
-        } else {
-            eprintln!("warning: spout_bridge.dll not found at {}", dll_path.display());
-        }
-
-        // Common Windows libs (safe even if some are unused)
-        println!("cargo:rustc-link-lib=opengl32");
-        println!("cargo:rustc-link-lib=user32");
-        println!("cargo:rustc-link-lib=gdi32");
-        println!("cargo:rustc-link-lib=shell32");
-        println!("cargo:rustc-link-lib=ole32");
-        println!("cargo:rustc-link-lib=uuid");
+    // Copy only if missing or obviously stale (simple heuristic: missing dest)
+    if !dest_dir.exists() {
+        copy_dir_recursive(&syphon_framework, &dest_dir)
+            .unwrap_or_else(|e| panic!("Failed to copy Syphon.framework -> {}: {e}", dest_dir.display()));
     }
 }
 

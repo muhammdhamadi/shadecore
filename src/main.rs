@@ -258,9 +258,13 @@ impl ParamStore {
 }
 
 // -------------------------------
-// Syphon C-ABI bridge (macOS only)
+// Syphon C-ABI bridge (macOS only, only when Syphon is vendored)
+//
+// build.rs emits `--cfg has_syphon` when it finds vendor/Syphon-Framework/Syphon.framework
+// and compiles native/syphon_bridge.m. This keeps macOS builds working even when Syphon
+// is not present.
 // -------------------------------
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", has_syphon))]
 extern "C" {
     fn syphon_server_create(name_utf8: *const i8) -> *mut std::ffi::c_void;
     fn syphon_server_publish_texture(
@@ -272,12 +276,12 @@ extern "C" {
     fn syphon_server_destroy(server_ptr: *mut std::ffi::c_void);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", has_syphon))]
 struct SyphonServer {
     ptr: *mut std::ffi::c_void,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", has_syphon))]
 impl SyphonServer {
     fn new(name: &str) -> Option<Self> {
         let c = CString::new(name).ok()?;
@@ -294,7 +298,7 @@ impl SyphonServer {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", has_syphon))]
 impl Drop for SyphonServer {
     fn drop(&mut self) {
         unsafe { syphon_server_destroy(self.ptr) };
@@ -651,7 +655,11 @@ fn main() {
     ));
 
     #[cfg(target_os = "macos")]
+    // Syphon is only available on macOS when vendored (build.rs sets `has_syphon`).
+    #[cfg(all(target_os = "macos", has_syphon))]
     let mut syphon: Option<SyphonServer> = None;
+    #[cfg(not(all(target_os = "macos", has_syphon)))]
+    let mut syphon: Option<()> = None;
 
     #[cfg(target_os = "windows")]
     let mut spout: Option<SpoutSender> = None;
@@ -739,7 +747,7 @@ fn main() {
                             OutputMode::Texture => {}
 
                             OutputMode::Syphon => {
-                                #[cfg(target_os = "macos")]
+                                #[cfg(all(target_os = "macos", has_syphon))]
                                 {
                                     if !syphon_enabled {
                                         if !warned {
@@ -757,6 +765,14 @@ fn main() {
                                         if let Some(ref server) = syphon {
                                             server.publish_texture(tex_id, w, h);
                                         }
+                                    }
+                                }
+
+                                #[cfg(all(target_os = "macos", not(has_syphon)))]
+                                {
+                                    if !warned {
+                                        println!("[output] Syphon requested but Syphon.framework is not vendored. Falling back to Texture.");
+                                        warned = true;
                                     }
                                 }
 
