@@ -28,3 +28,6 @@ anyhow = "1"
 
 [target.'cfg(windows)'.dependencies]
 libloading = "0.8"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(has_syphon)'] }

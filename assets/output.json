@@ -1,11 +1,11 @@
 {
     "output_mode": "texture",
     "syphon": {
-        "enabled": true,
+        "enabled": false,
         "server_name": "shadecore"
     },
     "spout": {
-        "enabled": false
+        "enabled": true
     },
     "hotkeys": {
         "texture": ["Digit1", "Numpad1"],

@@ -437,6 +437,26 @@ fn find_assets_base() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
+fn pick_platform_json(assets: &Path, stem: &str) -> PathBuf {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "other"
+    };
+
+    let platform = assets.join(format!("{stem}.{os}.json"));
+    if platform.exists() {
+        platform
+    } else {
+        assets.join(format!("{stem}.json"))
+    }
+}
+
+
 fn connect_midi(pf: &ParamsFile, store: Arc<Mutex<ParamStore>>) -> Option<midir::MidiInputConnection<()>> {
     let mut midi_in = MidiInput::new("shadecore-midi").ok()?;
     midi_in.ignore(Ignore::None);
@@ -540,8 +560,8 @@ fn main() {
 
     let frag_path = assets.join("shaders").join("default.frag");
     let present_frag_path = assets.join("shaders").join("present.frag");
-    let params_path = assets.join("params.json");
-    let output_cfg_path = assets.join("output.json");
+    let params_path = pick_platform_json(&assets, "params");
+    let output_cfg_path = pick_platform_json(&assets, "output");
 
     println!("[assets] base: {}", assets.display());
     println!("[assets] frag: {}", frag_path.display());
@@ -625,7 +645,19 @@ fn main() {
 
     let _midi_conn_in = connect_midi(&pf, store.clone());
 
-    let output_cfg = load_output_config(&output_cfg_path, OutputMode::Texture);
+    let default_mode = if cfg!(target_os = "windows") {
+        OutputMode::Spout
+    } else if cfg!(target_os = "macos") {
+        if cfg!(has_syphon) {
+            OutputMode::Syphon
+        } else {
+            OutputMode::Texture
+        }
+    } else {
+        OutputMode::Texture
+    };
+
+    let output_cfg = load_output_config(&output_cfg_path, default_mode);
 
     let syphon_name = output_cfg
         .syphon
