@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How It Works · shadecore</title>
+    <meta name="description" content="Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing." />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="site-title" href="/">shadecore</a>
+        <div class="site-tagline">Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.</div>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Docs</div>
+        <nav class="nav">
+          
+          
+            <a class="nav-item " href="/docs/01-overview/">
+              Overview
+            </a>
+          
+            <a class="nav-item " href="/docs/02-features/">
+              Features
+            </a>
+          
+            <a class="nav-item active" href="/docs/03-how-it-works/">
+              How It Works
+            </a>
+          
+            <a class="nav-item " href="/docs/04-output-routing/">
+              Output Routing
+            </a>
+          
+            <a class="nav-item " href="/docs/05-ndi/">
+              NDI
+            </a>
+          
+            <a class="nav-item " href="/docs/06-midi/">
+              MIDI
+            </a>
+          
+            <a class="nav-item " href="/docs/14-license/">
+              License
+            </a>
+          
+        </nav>
+      </aside>
+
+      <section class="content">
+        <article class="doc">
+  
+  <h1 id="how-it-works">How It Works</h1>
+
+<h2 id="requirements">Requirements</h2>
+
+<ul>
+  <li>macOS or Windows</li>
+  <li>Rust (stable toolchain)</li>
+</ul>
+
+<p>Platform-specific:</p>
+
+<ul>
+  <li><strong>macOS</strong>
+    <ul>
+      <li>Xcode Command Line Tools</li>
+      <li>Syphon.framework (vendored in project)</li>
+    </ul>
+  </li>
+  <li><strong>Windows</strong>
+    <ul>
+      <li>Visual Studio Build Tools (C++ workload)</li>
+      <li>Spout2 (vendored in project)</li>
+    </ul>
+  </li>
+  <li><strong>Streaming</strong>
+    <ul>
+      <li>FFmpeg available in <code class="language-plaintext highlighter-rouge">PATH</code></li>
+      <li>or set <code class="language-plaintext highlighter-rouge">stream.ffmpeg_path</code> in <code class="language-plaintext highlighter-rouge">assets/output*.json</code></li>
+    </ul>
+  </li>
+</ul>
+
+<h3 id="rust-crates">Rust Crates</h3>
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">glow</code> — OpenGL bindings</li>
+  <li><code class="language-plaintext highlighter-rouge">winit</code> / <code class="language-plaintext highlighter-rouge">glutin</code> — windowing + GL context</li>
+  <li><code class="language-plaintext highlighter-rouge">midir</code> — MIDI input</li>
+  <li><code class="language-plaintext highlighter-rouge">serde</code> / <code class="language-plaintext highlighter-rouge">serde_json</code> — configuration parsing</li>
+</ul>
+
+<h3 id="native-apis">Native APIs</h3>
+<ul>
+  <li>OpenGL</li>
+  <li>Cocoa / AppKit (macOS)</li>
+  <li>CoreMIDI</li>
+  <li>Syphon (vendored)</li>
+  <li>Spout2 (vendored)</li>
+</ul>
+
+<h2 id="project-structure">Project Structure</h2>
+<hr />
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>shadecore/
+├─ src/
+│  └─ main.rs              # Core engine loop
+├─ native/
+│  ├─ spout_bridge/        # C++ Spout2 bridge (Windows)
+│  ├─ syphon_bridge.m      # Objective-C Syphon bridge (macOS)
+│  └─ syphon_bridge.h
+├─ vendor/
+│  └─ Syphon.framework     # Vendored macOS framework
+├─ assets/
+│  ├─ params.json          # Parameters + MIDI schema
+│  ├─ output.json          # Output routing &amp; hotkeys
+│  ├─ output_ndi.json      # NDI-specific configuration
+│  └─ shaders/
+│     ├─ default.frag
+│     └─ present.frag
+├─ build.rs                # Native linking &amp; platform logic
+└─ Cargo.toml
+</code></pre></div></div>
+
+<h2 id="build--run-standard-engine">Build &amp; Run (Standard Engine)</h2>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cargo run
+</code></pre></div></div>
+
+<h2 id="build--run-standard-engine--ndi">Build &amp; Run (Standard Engine + NDI)</h2>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cargo run <span class="nt">--features</span> ndi
+</code></pre></div></div>
+
+<h2 id="pipeline-overview">Pipeline overview</h2>
+<h3 id="1-opengl-rendering">1. OpenGL Rendering</h3>
+
+<ul>
+  <li>A window and GL context are created with <code class="language-plaintext highlighter-rouge">winit</code> + <code class="language-plaintext highlighter-rouge">glutin</code></li>
+  <li>A fullscreen triangle is rendered every frame</li>
+  <li>All visuals are produced in the fragment shader</li>
+</ul>
+
+<h3 id="2-shader-uniforms">2. Shader Uniforms</h3>
+
+<p>Built-in uniforms:</p>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">u_time</code> — seconds since start</li>
+  <li><code class="language-plaintext highlighter-rouge">u_resolution</code> — framebuffer resolution</li>
+</ul>
+
+<p>Plus:</p>
+
+<ul>
+  <li>user-defined parameters from JSON</li>
+  <li>live-updated MIDI values</li>
+</ul>
+
+<h3 id="3-render-target">3. Render Target</h3>
+
+<ul>
+  <li>Rendering occurs into an offscreen framebuffer</li>
+  <li>The framebuffer texture is:
+    <ul>
+      <li>drawn to the preview window</li>
+      <li>shared with Syphon, Spout, Stream, or NDI depending on mode</li>
+    </ul>
+  </li>
+</ul>
+
+</article>
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="muted">© 2025 · shadecore</div>
+      </div>
+    </footer>
+  </body>
+</html>

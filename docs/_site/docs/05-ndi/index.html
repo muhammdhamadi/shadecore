@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NDI · shadecore</title>
+    <meta name="description" content="Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing." />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="site-title" href="/">shadecore</a>
+        <div class="site-tagline">Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.</div>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Docs</div>
+        <nav class="nav">
+          
+          
+            <a class="nav-item " href="/docs/01-overview/">
+              Overview
+            </a>
+          
+            <a class="nav-item " href="/docs/02-features/">
+              Features
+            </a>
+          
+            <a class="nav-item " href="/docs/03-how-it-works/">
+              How It Works
+            </a>
+          
+            <a class="nav-item " href="/docs/04-output-routing/">
+              Output Routing
+            </a>
+          
+            <a class="nav-item active" href="/docs/05-ndi/">
+              NDI
+            </a>
+          
+            <a class="nav-item " href="/docs/06-midi/">
+              MIDI
+            </a>
+          
+            <a class="nav-item " href="/docs/14-license/">
+              License
+            </a>
+          
+        </nav>
+      </aside>
+
+      <section class="content">
+        <article class="doc">
+  
+  <h1 id="ndi">NDI</h1>
+
+<p>NDI is <strong>not enabled in the default execution path</strong>. This is intentional.</p>
+
+<h2 id="why-ndi-is-separate">Why NDI Is Separate</h2>
+
+<p>NDI requires:</p>
+
+<ul>
+  <li>a different runtime lifecycle,</li>
+  <li>different threading assumptions,</li>
+  <li>tighter timing guarantees.</li>
+</ul>
+
+<p>Rather than complicate the core render loop, NDI runs in a <strong>dedicated execution mode</strong>.</p>
+
+<h2 id="running-with-ndi">Running with NDI</h2>
+
+<p>Depending on the active build configuration:</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cargo run <span class="nt">--features</span> ndi
+</code></pre></div></div>
+
+<p>or</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cargo run <span class="nt">--bin</span> shadecore-ndi
+</code></pre></div></div>
+
+<p>Check <code class="language-plaintext highlighter-rouge">Cargo.toml</code> for the active NDI configuration.</p>
+
+<h2 id="notes">Notes</h2>
+
+<ul>
+  <li>NDI output is discoverable by OBS, Resolume, and other NDI-capable software</li>
+  <li>Local preview still runs unless explicitly disabled</li>
+  <li>NDI uses its own output configuration file</li>
+</ul>
+
+<p>This separation is <strong>by design</strong>, not a limitation.</p>
+
+</article>
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="muted">© 2025 · shadecore</div>
+      </div>
+    </footer>
+  </body>
+</html>

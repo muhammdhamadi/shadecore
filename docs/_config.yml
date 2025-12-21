@@ -1,0 +1,28 @@
+title: shadecore
+description: Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.
+theme: minima
+
+# If you publish from the /docs folder in GitHub Pages, you usually don't need baseurl here.
+# If your Pages URL is https://<user>.github.io/<repo>/ then set:
+# baseurl: "/<repo>"
+# url: "https://<user>.github.io"
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+permalink: pretty
+
+collections:
+  docs:
+    output: true
+    permalink: /:collection/:name/
+
+defaults:
+  - scope:
+      path: ""
+      type: docs
+    values:
+      layout: doc
+
+# Build a simple top nav from ordered docs.

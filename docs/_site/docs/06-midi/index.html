@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MIDI · shadecore</title>
+    <meta name="description" content="Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing." />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="site-title" href="/">shadecore</a>
+        <div class="site-tagline">Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.</div>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Docs</div>
+        <nav class="nav">
+          
+          
+            <a class="nav-item " href="/docs/01-overview/">
+              Overview
+            </a>
+          
+            <a class="nav-item " href="/docs/02-features/">
+              Features
+            </a>
+          
+            <a class="nav-item " href="/docs/03-how-it-works/">
+              How It Works
+            </a>
+          
+            <a class="nav-item " href="/docs/04-output-routing/">
+              Output Routing
+            </a>
+          
+            <a class="nav-item " href="/docs/05-ndi/">
+              NDI
+            </a>
+          
+            <a class="nav-item active" href="/docs/06-midi/">
+              MIDI
+            </a>
+          
+            <a class="nav-item " href="/docs/14-license/">
+              License
+            </a>
+          
+        </nav>
+      </aside>
+
+      <section class="content">
+        <article class="doc">
+  
+  <h1 id="midi">MIDI</h1>
+
+<p>Parameters are defined declaratively in JSON.</p>
+
+<div class="language-json highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="w">
+  </span><span class="nl">"version"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w">
+  </span><span class="nl">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="w">
+    </span><span class="p">{</span><span class="w">
+      </span><span class="nl">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"speed"</span><span class="p">,</span><span class="w">
+      </span><span class="nl">"ty"</span><span class="p">:</span><span class="w"> </span><span class="s2">"float"</span><span class="p">,</span><span class="w">
+      </span><span class="nl">"min"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span><span class="p">,</span><span class="w">
+      </span><span class="nl">"max"</span><span class="p">:</span><span class="w"> </span><span class="mf">5.0</span><span class="p">,</span><span class="w">
+      </span><span class="nl">"default"</span><span class="p">:</span><span class="w"> </span><span class="mf">1.0</span><span class="p">,</span><span class="w">
+      </span><span class="nl">"midi_cc"</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="w">
+    </span><span class="p">}</span><span class="w">
+  </span><span class="p">]</span><span class="w">
+</span><span class="p">}</span><span class="w">
+</span></code></pre></div></div>
+
+<p>Behavior:</p>
+
+<ul>
+  <li>MIDI CC values (0–127) are normalized</li>
+  <li>Values are mapped into parameter ranges</li>
+  <li>Parameters update every frame</li>
+  <li>No hidden smoothing or automation</li>
+</ul>
+
+<p>Controller layouts are portable and reproducible.</p>
+
+</article>
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="muted">© 2025 · shadecore</div>
+      </div>
+    </footer>
+  </body>
+</html>

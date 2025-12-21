@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>shadecore Documentation · shadecore</title>
+    <meta name="description" content="Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing." />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="site-title" href="/">shadecore</a>
+        <div class="site-tagline">Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.</div>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Docs</div>
+        <nav class="nav">
+          
+          
+            <a class="nav-item " href="/docs/01-overview/">
+              Overview
+            </a>
+          
+            <a class="nav-item " href="/docs/02-features/">
+              Features
+            </a>
+          
+            <a class="nav-item " href="/docs/03-how-it-works/">
+              How It Works
+            </a>
+          
+            <a class="nav-item " href="/docs/04-output-routing/">
+              Output Routing
+            </a>
+          
+            <a class="nav-item " href="/docs/05-ndi/">
+              NDI
+            </a>
+          
+            <a class="nav-item " href="/docs/06-midi/">
+              MIDI
+            </a>
+          
+            <a class="nav-item " href="/docs/14-license/">
+              License
+            </a>
+          
+        </nav>
+      </aside>
+
+      <section class="content">
+        <p align="center">
+  <img width="45%" height="45%" src="https://github.com/schwwaaa/shadecore/blob/main/media/shadecore-logo.png?raw=true" />  
+</p>
+
+<p align="center"><em>A native, high-performance GLSL rendering engine written in Rust, designed for real-time shader experimentation, hardware control, and live video routing.</em></p>
+
+<h1 id="supported-outputs">Supported outputs</h1>
+<ul>
+  <li><strong>FBO texture</strong> (local window)</li>
+  <li><strong>Syphon</strong> (macOS)</li>
+  <li><strong>Spout2</strong> (Windows)</li>
+  <li><strong>FFmpeg streaming</strong> (RTSP / RTMP)</li>
+  <li><strong>NDI</strong> (separate execution mode)</li>
+</ul>
+
+<h1 id="project-structure">Project Structure</h1>
+<hr />
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>shadecore/
+├─ src/
+│  └─ main.rs              # Core engine loop
+├─ native/
+│  ├─ spout_bridge/        # C++ Spout2 bridge (Windows)
+│  ├─ syphon_bridge.m      # Objective-C Syphon bridge (macOS)
+│  └─ syphon_bridge.h
+├─ vendor/
+│  └─ Syphon.framework     # Vendored macOS framework
+├─ assets/
+│  ├─ params.json          # Parameters + MIDI schema
+│  ├─ output.json          # Output routing &amp; hotkeys
+│  ├─ output_ndi.json      # NDI-specific configuration
+│  └─ shaders/
+│     ├─ default.frag
+│     └─ present.frag
+├─ build.rs                # Native linking &amp; platform logic
+└─ Cargo.toml
+</code></pre></div></div>
+
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="muted">© 2025 · shadecore</div>
+      </div>
+    </footer>
+  </body>
+</html>

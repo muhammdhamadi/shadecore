@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Features · shadecore</title>
+    <meta name="description" content="Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing." />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="site-title" href="/">shadecore</a>
+        <div class="site-tagline">Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.</div>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Docs</div>
+        <nav class="nav">
+          
+          
+            <a class="nav-item " href="/docs/01-overview/">
+              Overview
+            </a>
+          
+            <a class="nav-item active" href="/docs/02-features/">
+              Features
+            </a>
+          
+            <a class="nav-item " href="/docs/03-how-it-works/">
+              How It Works
+            </a>
+          
+            <a class="nav-item " href="/docs/04-output-routing/">
+              Output Routing
+            </a>
+          
+            <a class="nav-item " href="/docs/05-ndi/">
+              NDI
+            </a>
+          
+            <a class="nav-item " href="/docs/06-midi/">
+              MIDI
+            </a>
+          
+            <a class="nav-item " href="/docs/14-license/">
+              License
+            </a>
+          
+        </nav>
+      </aside>
+
+      <section class="content">
+        <article class="doc">
+  
+  <h1 id="features">Features</h1>
+
+<p>The engine is intentionally <strong>low-level and explicit</strong>:</p>
+
+<ul>
+  <li>No GUI framework</li>
+  <li>No WebView</li>
+  <li>No runtime abstraction layer between your shader and the GPU</li>
+</ul>
+
+<h2 id="what-is-it-though">What is it though?</h2>
+<ul>
+  <li>a <strong>foundation</strong> for custom shader-based tools,</li>
+  <li>a <strong>bridge</strong> between GLSL and external control systems,</li>
+  <li>a <strong>standalone binary</strong>, not a plugin locked into another host.</li>
+</ul>
+
+<p>It is equally suited for live performance, installations, research tools, and experimental pipelines.</p>
+
+<h2 id="native-features">Native features</h2>
+<ul>
+  <li>Native OpenGL rendering (via <code class="language-plaintext highlighter-rouge">glow</code>)</li>
+  <li>Fullscreen GLSL fragment shader pipeline</li>
+  <li>JSON-defined parameter schema</li>
+  <li>MIDI control (CoreMIDI on macOS, cross-platform via <code class="language-plaintext highlighter-rouge">midir</code>)</li>
+  <li><strong>Syphon server output</strong> (macOS)</li>
+  <li><strong>Spout2 sender output</strong> (Windows)</li>
+  <li><strong>FFmpeg streaming output</strong> (RTSP / RTMP)</li>
+  <li><strong>NDI output (separate run mode)</strong></li>
+  <li>Vendored native dependencies (no system installs required)</li>
+  <li>Deterministic build &amp; runtime behavior</li>
+</ul>
+
+<h1 id="use-cases">Use Cases</h1>
+<ul>
+  <li>Live shader performance</li>
+  <li>Visual instruments</li>
+  <li>Generative installations</li>
+  <li>Feedback-based video systems</li>
+  <li>Custom GPU tools for OBS, Resolume, TouchDesigner pipelines</li>
+</ul>
+
+</article>
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="muted">© 2025 · shadecore</div>
+      </div>
+    </footer>
+  </body>
+</html>

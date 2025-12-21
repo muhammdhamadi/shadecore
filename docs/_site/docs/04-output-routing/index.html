@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Output Routing · shadecore</title>
+    <meta name="description" content="Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing." />
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="site-title" href="/">shadecore</a>
+        <div class="site-tagline">Native GLSL shader engine in Rust — Syphon/Spout/FFmpeg/NDI routing.</div>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Docs</div>
+        <nav class="nav">
+          
+          
+            <a class="nav-item " href="/docs/01-overview/">
+              Overview
+            </a>
+          
+            <a class="nav-item " href="/docs/02-features/">
+              Features
+            </a>
+          
+            <a class="nav-item " href="/docs/03-how-it-works/">
+              How It Works
+            </a>
+          
+            <a class="nav-item active" href="/docs/04-output-routing/">
+              Output Routing
+            </a>
+          
+            <a class="nav-item " href="/docs/05-ndi/">
+              NDI
+            </a>
+          
+            <a class="nav-item " href="/docs/06-midi/">
+              MIDI
+            </a>
+          
+            <a class="nav-item " href="/docs/14-license/">
+              License
+            </a>
+          
+        </nav>
+      </aside>
+
+      <section class="content">
+        <article class="doc">
+  
+  <h1 id="output-routing">Output Routing</h1>
+
+<p><code class="language-plaintext highlighter-rouge">shadecore</code> always renders into an offscreen framebuffer (FBO). That framebuffer texture is:</p>
+
+<ul>
+  <li>drawn to the local preview window (always on)</li>
+  <li>optionally published or streamed via the selected output mode</li>
+</ul>
+
+<p>The active output mode is controlled by <code class="language-plaintext highlighter-rouge">assets/output.json</code> (or an alternate output configuration file).</p>
+
+<hr />
+
+<h2 id="runtime-hotkeys-default">Runtime Hotkeys (Default)</h2>
+
+<h3 id="1--texture-only-preview"><code class="language-plaintext highlighter-rouge">1</code> — Texture Only (Preview)</h3>
+
+<p><strong>What it does</strong></p>
+<ul>
+  <li>Disables all external routing.</li>
+  <li>Only the local preview window is active.</li>
+</ul>
+
+<p><strong>When to use it</strong></p>
+<ul>
+  <li>Debugging shaders and uniforms</li>
+  <li>Verifying render correctness</li>
+  <li>Performance testing</li>
+  <li>Running without Syphon / Spout / FFmpeg / NDI dependencies</li>
+</ul>
+
+<p><strong>Expected behavior</strong></p>
+<ul>
+  <li>Lowest overhead</li>
+  <li>Most deterministic execution</li>
+  <li>No external consumers receive frames</li>
+</ul>
+
+<hr />
+
+<h3 id="2--syphon-macos"><code class="language-plaintext highlighter-rouge">2</code> — Syphon (macOS)</h3>
+
+<p><strong>What it does</strong></p>
+<ul>
+  <li>Publishes the rendered OpenGL texture to a Syphon server.</li>
+</ul>
+
+<p><strong>When to use it</strong></p>
+<ul>
+  <li>Routing video into OBS (Syphon input)</li>
+  <li>macOS-based visual tools such as Resolume, MadMapper, TouchDesigner, or VDMX</li>
+  <li>Local, zero-copy GPU workflows</li>
+</ul>
+
+<p><strong>Expected behavior</strong></p>
+<ul>
+  <li>Very low latency</li>
+  <li>GPU texture sharing (no encode, no network)</li>
+  <li>macOS only</li>
+</ul>
+
+<p><strong>Notes</strong></p>
+<ul>
+  <li>Syphon server name is configurable in the output config.</li>
+  <li>Local preview remains active.</li>
+</ul>
+
+<hr />
+
+<h3 id="3--spout2-windows"><code class="language-plaintext highlighter-rouge">3</code> — Spout2 (Windows)</h3>
+
+<p><strong>What it does</strong></p>
+<ul>
+  <li>Publishes the rendered texture as a Spout2 sender.</li>
+</ul>
+
+<p><strong>When to use it</strong></p>
+<ul>
+  <li>OBS on Windows (Spout2 plugin)</li>
+  <li>TouchDesigner, Resolume, or other Windows-based visual tools</li>
+  <li>Local low-latency routing without encoding</li>
+</ul>
+
+<p><strong>Expected behavior</strong></p>
+<ul>
+  <li>Very low latency</li>
+  <li>GPU texture sharing</li>
+  <li>Windows only</li>
+</ul>
+
+<p><strong>Notes</strong></p>
+<ul>
+  <li>Sender name is configurable.</li>
+  <li>Preview remains active.</li>
+</ul>
+
+<hr />
+
+<h3 id="4--stream-ffmpeg-rtsp--rtmp"><code class="language-plaintext highlighter-rouge">4</code> — Stream (FFmpeg RTSP / RTMP)</h3>
+
+<p><strong>What it does</strong></p>
+<ul>
+  <li>Spawns an FFmpeg process.</li>
+  <li>Frames are encoded and streamed to a network endpoint.</li>
+</ul>
+
+<p><strong>When to use it</strong></p>
+<ul>
+  <li>Sending video to another machine</li>
+  <li>Feeding RTSP/RTMP servers (e.g., mediamtx)</li>
+  <li>Remote or headless workflows</li>
+  <li>Software that expects a network stream</li>
+</ul>
+
+<p><strong>Expected behavior</strong></p>
+<ul>
+  <li>Higher CPU/GPU load due to encoding</li>
+  <li>Higher latency than texture-sharing outputs</li>
+  <li>Network-visible stream</li>
+</ul>
+
+<p><strong>Common configuration fields</strong></p>
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">stream.ffmpeg_path</code></li>
+  <li><code class="language-plaintext highlighter-rouge">stream.url</code></li>
+  <li>codec, bitrate, preset, framerate, resolution</li>
+</ul>
+
+<p><strong>Notes</strong></p>
+<ul>
+  <li>Many encoders (e.g. H.264) require even-numbered frame dimensions.</li>
+  <li>Preview remains active.</li>
+</ul>
+
+<hr />
+
+<h3 id="6--ndi-dedicated-mode"><code class="language-plaintext highlighter-rouge">6</code> — NDI (Dedicated Mode)</h3>
+
+<p><strong>What it does</strong></p>
+<ul>
+  <li>Sends frames to an NDI sender discoverable on the local network.</li>
+</ul>
+
+<p><strong>Why NDI is separate</strong></p>
+<ul>
+  <li>Requires a different runtime lifecycle</li>
+  <li>Different threading and timing constraints</li>
+  <li>Kept out of the core render loop intentionally</li>
+</ul>
+
+<p><strong>When to use it</strong></p>
+<ul>
+  <li>OBS NDI input workflows</li>
+  <li>LAN-based video routing with automatic discovery</li>
+  <li>Multi-machine studio setups</li>
+</ul>
+
+<p><strong>Expected behavior</strong></p>
+<ul>
+  <li>Network-based video transport</li>
+  <li>Higher overhead than Syphon/Spout</li>
+  <li>Easier discovery than RTSP in many setups</li>
+</ul>
+
+<p><strong>Notes</strong></p>
+<ul>
+  <li>Typically run via a dedicated feature or binary.</li>
+  <li>Uses its own output configuration (e.g. <code class="language-plaintext highlighter-rouge">output_ndi.json</code>).</li>
+  <li>Preview behavior depends on NDI mode configuration.</li>
+</ul>
+
+<hr />
+
+<h2 id="hotkey-configuration">Hotkey Configuration</h2>
+
+<p>Hotkeys are defined in the output configuration JSON. This allows:</p>
+
+<ul>
+  <li>Rebinding keys without recompiling</li>
+  <li>Platform-specific key maps</li>
+  <li>Separate configs per output mode</li>
+</ul>
+
+<p>This design keeps routing logic declarative and reproducible.</p>
+
+</article>
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="muted">© 2025 · shadecore</div>
+      </div>
+    </footer>
+  </body>
+</html>
