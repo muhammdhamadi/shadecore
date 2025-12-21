@@ -17,10 +17,12 @@ use std::ffi::CString;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+mod recording;
+use recording::{Recorder, RecordingCfg};
 
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
@@ -286,6 +288,8 @@ fn parse_keycode(name: &str) -> Option<KeyCode> {
         "Numpad9" => Some(KeyCode::Numpad9),
 
         // Common aliases (feel free to extend)
+        "Insert" => Some(KeyCode::Insert),
+        "PageUp" => Some(KeyCode::PageUp),
         "KeyT" => Some(KeyCode::KeyT),
         "KeyS" => Some(KeyCode::KeyS),
         _ => None,
@@ -321,6 +325,56 @@ fn build_hotkey_map(cfg: &HotkeysCfg) -> HashMap<KeyCode, OutputMode> {
     }
     map
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecHotkeyAction {
+    Toggle,
+    Start,
+    Stop,
+}
+
+fn build_recording_hotkey_map(cfg: &RecordingCfg) -> HashMap<KeyCode, RecHotkeyAction> {
+    let mut map = HashMap::new();
+    let mut add_key = |name: &str, action: RecHotkeyAction| {
+        if let Some(code) = parse_keycode(name) {
+            map.insert(code, action);
+            match code {
+                KeyCode::Numpad0 => {
+                    map.insert(KeyCode::Digit0, action);
+                    map.insert(KeyCode::Insert, action);
+                }
+                KeyCode::Numpad9 => {
+                    map.insert(KeyCode::Digit9, action);
+                    map.insert(KeyCode::PageUp, action);
+                }
+                _ => {}
+            }
+        }
+    };
+    for k in &cfg.toggle_keys { add_key(k, RecHotkeyAction::Toggle); }
+    for k in &cfg.start_keys { add_key(k, RecHotkeyAction::Start); }
+    for k in &cfg.stop_keys { add_key(k, RecHotkeyAction::Stop); }
+    map
+}
+
+fn load_recording_config(path: &Path) -> RecordingCfg {
+    let default_cfg = RecordingCfg::default();
+    let data = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("[recording] No recording config at {}. Using defaults (enabled=false).", path.display());
+            return default_cfg;
+        }
+    };
+    match serde_json::from_str::<RecordingCfg>(&data) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            println!("[recording] Failed to parse {}: {e}. Using defaults.", path.display());
+            default_cfg
+        }
+    }
+}
+
 
 fn default_true() -> bool {
     true
@@ -1387,6 +1441,9 @@ fn main() {
     println!("[assets] present: {}", present_frag_path.display());
     println!("[assets] params: {}", params_path.display());
     println!("[assets] output: {}", output_cfg_path.display());
+    let recording_cfg_path = pick_platform_json(&assets, "recording");
+    println!("[assets] recording: {}", recording_cfg_path.display());
+
 
     let frag_src = read_to_string(&frag_path);
     let present_frag_src = read_to_string(&present_frag_path);
@@ -1477,6 +1534,21 @@ fn main() {
     };
 
     let output_cfg = load_output_config(&output_cfg_path, default_mode);
+let recording_cfg = load_recording_config(&recording_cfg_path);
+println!(
+    "[recording] loaded: enabled={} size={}x{} fps={} start_keys={:?} stop_keys={:?} toggle_keys={:?} out_dir={} ffmpeg_path={}",
+    recording_cfg.enabled,
+    recording_cfg.width,
+    recording_cfg.height,
+    recording_cfg.fps,
+    recording_cfg.start_keys,
+    recording_cfg.stop_keys,
+    recording_cfg.toggle_keys,
+    recording_cfg.out_dir.display(),
+    recording_cfg.ffmpeg_path
+);
+let recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
+
 
     let syphon_name = output_cfg
         .syphon
@@ -1558,7 +1630,14 @@ fn main() {
     #[cfg(target_os = "windows")]
     let mut spout: Option<SpoutSender> = None;
 
-    let mut stream = StreamSender::new(stream_cfg.clone());
+    let mut recorder = Recorder::new(recording_cfg.clone());
+let mut rec_rt: Option<RenderTarget> = None;
+let mut rec_pbos: Option<[glow::NativeBuffer; 2]> = None;
+let mut rec_pbo_index: usize = 0;
+let mut rec_pbo_primed: bool = false;
+let mut rec_pbo_bytes: usize = 0;
+
+let mut stream = StreamSender::new(stream_cfg.clone());
     let mut ndi = ndi_out::NdiSender::new(ndi_cfg.clone());
 
     let mut warned = false;
@@ -1572,18 +1651,63 @@ fn main() {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => target.exit(),
 
-                    WindowEvent::KeyboardInput { event, .. } => {
-                        if event.state.is_pressed() {
+                                        WindowEvent::KeyboardInput { event, .. } => {
+                        if event.state.is_pressed() && !event.repeat {
                             if let PhysicalKey::Code(code) = event.physical_key {
-                                let new_mode = hotkey_map.get(&code).copied();
+                                println!("[key] pressed: {:?}", code);
 
+                                if let Some(action) = recording_hotkeys.get(&code).copied() {
+                                    println!("[recording] hotkey pressed: {:?} -> {:?}", code, action);
+                                    match action {
+                                        RecHotkeyAction::Toggle => {
+                                            if recorder.is_recording() {
+                                                recorder.stop();
+                                                println!("[recording] stopped");
+                                            } else if recorder.is_enabled() {
+                                                match recorder.start(&assets) {
+                                                    Ok(p) => {
+                                                        rec_pbo_index = 0;
+                                                        rec_pbo_primed = false;
+                                                        println!("[recording] started -> {}", p.display());
+                                                    }
+                                                    Err(e) => eprintln!("[recording] start failed: {e}"),
+                                                }
+                                            } else {
+                                                println!("[recording] disabled: set enabled=true in recording.json");
+                                            }
+                                        }
+                                        RecHotkeyAction::Start => {
+                                            if recorder.is_recording() {
+                                                println!("[recording] already recording");
+                                            } else if recorder.is_enabled() {
+                                                match recorder.start(&assets) {
+                                                    Ok(p) => {
+                                                        rec_pbo_index = 0;
+                                                        rec_pbo_primed = false;
+                                                        println!("[recording] started -> {}", p.display());
+                                                    }
+                                                    Err(e) => eprintln!("[recording] start failed: {e}"),
+                                                }
+                                            } else {
+                                                println!("[recording] disabled: set enabled=true in recording.json");
+                                            }
+                                        }
+                                        RecHotkeyAction::Stop => {
+                                            if recorder.is_recording() {
+                                                recorder.stop();
+                                                println!("[recording] stopped");
+                                            } else {
+                                                println!("[recording] not recording");
+                                            }
+                                        }
+                                    }
+                                    return;
+                                }
+
+                                let new_mode = hotkey_map.get(&code).copied();
                                 if let Some(m) = new_mode {
-                                    if output_mode == OutputMode::Stream && m != OutputMode::Stream {
-                                        stream.stop();
-                                    }
-                                    if output_mode == OutputMode::Ndi && m != OutputMode::Ndi {
-                                        ndi.stop();
-                                    }
+                                    if output_mode == OutputMode::Stream && m != OutputMode::Stream { stream.stop(); }
+                                    if output_mode == OutputMode::Ndi && m != OutputMode::Ndi { ndi.stop(); }
                                     output_mode = m;
                                     warned = false;
                                     println!("[output] switched -> {:?}", output_mode);
@@ -1640,6 +1764,115 @@ fn main() {
                         gl.bind_framebuffer(glow::FRAMEBUFFER, None);
 
                         let tex_id = tex_id_u32(rt.tex);
+// ------------------------------------------------------------
+// Recording capture (FBO-only) - async PBO readback
+// ------------------------------------------------------------
+if recorder.is_recording() {
+    let rec_w = recorder.cfg().width as i32;
+    let rec_h = recorder.cfg().height as i32;
+
+    if rec_w > 0 && rec_h > 0 {
+        let needs_new = rec_rt
+            .as_ref()
+            .map(|r| r.w != rec_w || r.h != rec_h)
+            .unwrap_or(true);
+
+        if needs_new {
+            if rec_rt.is_none() {
+                rec_rt = Some(create_render_target(&gl, rec_w, rec_h));
+            } else if let Some(rr) = rec_rt.as_mut() {
+                resize_render_target(&gl, rr, rec_w, rec_h);
+            }
+
+            // (Re)allocate double PBOs for async readback
+            let bytes = (rec_w as usize) * (rec_h as usize) * 4;
+            if rec_pbo_bytes != bytes || rec_pbos.is_none() {
+                if let Some(pbos) = rec_pbos.take() {
+                    gl.delete_buffer(pbos[0]);
+                    gl.delete_buffer(pbos[1]);
+                }
+
+                let pbo0 = gl.create_buffer().expect("create_buffer failed");
+                let pbo1 = gl.create_buffer().expect("create_buffer failed");
+
+                for pbo in [pbo0, pbo1] {
+                    gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(pbo));
+                    gl.buffer_data_size(
+                        glow::PIXEL_PACK_BUFFER,
+                        bytes as i32,
+                        glow::STREAM_READ,
+                    );
+                }
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+
+                rec_pbos = Some([pbo0, pbo1]);
+                rec_pbo_index = 0;
+                rec_pbo_primed = false;
+                rec_pbo_bytes = bytes;
+            }
+        }
+
+        if let (Some(rr), Some(pbos)) = (rec_rt.as_ref(), rec_pbos.as_ref()) {
+            // Blit from main render target -> record target (scale)
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(rt.fbo));
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(rr.fbo));
+            gl.blit_framebuffer(
+                0, 0, w, h,
+                0, 0, rec_w, rec_h,
+                glow::COLOR_BUFFER_BIT,
+                glow::LINEAR,
+            );
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+
+            let write_pbo = pbos[rec_pbo_index];
+            let read_pbo = pbos[(rec_pbo_index + 1) & 1];
+
+            // GPU -> PBO
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(rr.fbo));
+            gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(write_pbo));
+            gl.read_pixels(
+                0,
+                0,
+                rec_w,
+                rec_h,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::BufferOffset(0),
+            );
+            gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+
+            // CPU: map previous PBO and send to ffmpeg
+            if rec_pbo_primed {
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, Some(read_pbo));
+                let ptr = gl.map_buffer_range(
+                    glow::PIXEL_PACK_BUFFER,
+                    0,
+                    rec_pbo_bytes as i32,
+                    glow::MAP_READ_BIT,
+                );
+                if !ptr.is_null() {
+                    let slice = std::slice::from_raw_parts(
+                        ptr as *const u8,
+                        rec_pbo_bytes,
+                    );
+                    recorder.try_send_frame_owned(slice.to_vec());
+                    gl.unmap_buffer(glow::PIXEL_PACK_BUFFER);
+                } else {
+                    let _ = gl.unmap_buffer(glow::PIXEL_PACK_BUFFER);
+                }
+                gl.bind_buffer(glow::PIXEL_PACK_BUFFER, None);
+            } else {
+                rec_pbo_primed = true;
+            }
+
+            rec_pbo_index = (rec_pbo_index + 1) & 1;
+        }
+    }
+}
+
+
 
                         match output_mode {
                             OutputMode::Texture => {}
