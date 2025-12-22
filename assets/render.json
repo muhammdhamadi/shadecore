@@ -1,4 +1,22 @@
 {
-    "frag": "shaders/02-plasmawarp.frag",
-    "present_frag": "shaders/present.frag"
+    "frag_variants": [
+        "shaders/01-kaleido.frag",
+        "shaders/02-plasmawarp.frag",
+        "shaders/03-tunnel.frag",
+        "shaders/04-voronoi.frag"
+    ],
+    "active_frag": "shaders/02-plasmawarp.frag",
+    "present_frag": "shaders/present.frag",
+    "frag_hotkeys": {
+        "next": [
+            "Quote",
+            "Period",
+            "Backquote"
+        ],
+        "prev": [
+            "Semicolon",
+            "Comma",
+            "IntlBackslash"
+        ]
+    }
 }

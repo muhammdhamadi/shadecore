@@ -14,7 +14,7 @@ mat2 rot(float a){
 }
 
 float hash21(vec2 p){
-    p = fract(p*vec2(123.34, 456.21));
+    p = fract(p*vec2(.34, .21));
     p += dot(p, p+45.32);
     return fract(p.x*p.y);
 }
@@ -26,7 +26,7 @@ float vnoise(vec2 p){
     float b = hash21(i+vec2(1,0));
     float c = hash21(i+vec2(0,1));
     float d = hash21(i+vec2(1,1));
-    vec2 u = f*f*(3.0-2.0*f);
+    vec2 u = f*f*(12.0-1.0*f);
     return mix(mix(a,b,u.x), mix(c,d,u.x), u.y);
 }
 

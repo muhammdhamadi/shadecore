@@ -292,6 +292,18 @@ fn parse_keycode(name: &str) -> Option<KeyCode> {
         "PageUp" => Some(KeyCode::PageUp),
         "KeyT" => Some(KeyCode::KeyT),
         "KeyS" => Some(KeyCode::KeyS),
+
+        // Profile switching defaults / common picks
+        "BracketLeft" => Some(KeyCode::BracketLeft),
+        "BracketRight" => Some(KeyCode::BracketRight),
+        "KeyP" => Some(KeyCode::KeyP),
+        "KeyO" => Some(KeyCode::KeyO),
+        "KeyL" => Some(KeyCode::KeyL),
+        "KeyD" => Some(KeyCode::KeyD),
+        "KeyN" => Some(KeyCode::KeyN),
+        "KeyB" => Some(KeyCode::KeyB),
+        "KeyM" => Some(KeyCode::KeyM),
+
         _ => None,
     }
 }
@@ -488,6 +500,128 @@ fn default_true() -> bool {
     true
 }
 
+
+fn build_profile_hotkey_map(pf: &ParamsFile) -> HashMap<KeyCode, ProfileAction> {
+    let mut map: HashMap<KeyCode, ProfileAction> = HashMap::new();
+
+    // Configured hotkeys from params.json
+    for k in &pf.profile_hotkeys.next {
+        if let Some(code) = parse_keycode(k) {
+            map.insert(code, ProfileAction::Next);
+        }
+    }
+    for k in &pf.profile_hotkeys.prev {
+        if let Some(code) = parse_keycode(k) {
+            map.insert(code, ProfileAction::Prev);
+        }
+    }
+    for (profile_name, keys) in &pf.profile_hotkeys.set {
+        for k in keys {
+            if let Some(code) = parse_keycode(k) {
+                map.insert(code, ProfileAction::Set(profile_name.clone()));
+            }
+        }
+    }
+
+    // Always provide the classic default behavior:
+    //   ] = next profile
+    //   [ = prev profile
+    // unless the user explicitly bound those keys already.
+    map.entry(KeyCode::BracketRight).or_insert(ProfileAction::Next);
+    map.entry(KeyCode::BracketLeft).or_insert(ProfileAction::Prev);
+
+    map
+}
+
+
+fn sorted_profile_names_for_shader(
+    pf: &ParamsFile,
+    assets: &std::path::Path,
+    shader_frag: &std::path::Path,
+) -> Vec<String> {
+    // Prefer per-shader profiles if present
+    for (k, per_shader) in &pf.shader_profiles {
+        let resolved = resolve_assets_path(assets, k);
+        if resolved == shader_frag {
+            let mut names: Vec<String> = per_shader.keys().cloned().collect();
+            names.sort();
+            return names;
+        }
+    }
+
+    // Fallback: global profiles
+    let mut names: Vec<String> = pf.profiles.keys().cloned().collect();
+    names.sort();
+    names
+}
+
+fn pick_active_profile_for_shader(
+    pf: &ParamsFile,
+    assets: &std::path::Path,
+    shader_frag: &std::path::Path,
+) -> Option<String> {
+    // If there is a per-shader active profile entry, use it
+    for (k, active_name) in &pf.active_shader_profiles {
+        let resolved = resolve_assets_path(assets, k);
+        if resolved == shader_frag {
+            return Some(active_name.clone());
+        }
+    }
+
+    // Otherwise: per-shader "default" if present, else first
+    for (k, per_shader) in &pf.shader_profiles {
+        let resolved = resolve_assets_path(assets, k);
+        if resolved == shader_frag {
+            if per_shader.contains_key("default") {
+                return Some("default".to_string());
+            }
+            let mut names: Vec<String> = per_shader.keys().cloned().collect();
+            names.sort();
+            return names.first().cloned();
+        }
+    }
+
+    // Fallback to legacy global selection behavior
+    if let Some(n) = pf.active_profile.clone() {
+        return Some(n);
+    }
+    if pf.profiles.contains_key("default") {
+        return Some("default".to_string());
+    }
+    let mut names: Vec<String> = pf.profiles.keys().cloned().collect();
+    names.sort();
+    names.first().cloned()
+}
+
+fn set_active_profile_for_shader(
+    pf: &mut ParamsFile,
+    assets: &std::path::Path,
+    shader_frag: &std::path::Path,
+    profile_name: &str,
+) {
+    // Update existing entry if present
+    for (k, v) in pf.active_shader_profiles.iter_mut() {
+        let resolved = resolve_assets_path(assets, k);
+        if resolved == shader_frag {
+            *v = profile_name.to_string();
+            return;
+        }
+    }
+
+    // Otherwise, create a new entry using the best matching shader_profiles key string if present;
+    // if not, fall back to storing the absolute path string.
+    for (k, per_shader) in &pf.shader_profiles {
+        let resolved = resolve_assets_path(assets, k);
+        if resolved == shader_frag && per_shader.contains_key(profile_name) {
+            pf.active_shader_profiles.insert(k.clone(), profile_name.to_string());
+            return;
+        }
+    }
+
+    pf.active_shader_profiles
+        .insert(shader_frag.to_string_lossy().to_string(), profile_name.to_string());
+}
+
 fn default_output_mode() -> OutputMode {
     OutputMode::Texture
 }
@@ -560,6 +694,31 @@ struct ParamsFile {
     midi: MidiGlobalCfg,
     #[serde(default)]
     params: Vec<ParamDef>,
+
+    /// Optional named presets that override per-param defaults.
+    /// Example:
+    /// "profiles": { "default": { "u_gain": 1.0 }, "lofi": { "u_gain": 0.3 } }
+    #[serde(default)]
+    profiles: HashMap<String, ProfilePreset>,
+
+    /// Per-shader profiles. Keys are frag paths (same strings you use in render.json),
+    /// values are maps of profile_name -> preset.
+    /// This enforces: a shader only cycles through its own profiles.
+    #[serde(default)]
+    shader_profiles: HashMap<String, HashMap<String, ProfilePreset>>,
+
+    /// Per-shader active profile name. Keyed by frag path.
+    #[serde(default)]
+    active_shader_profiles: HashMap<String, String>,
+
+
+    /// Which profile is active on startup (and on hot-reload), if present.
+    #[serde(default)]
+    active_profile: Option<String>,
+
+    /// Optional profile switching hotkeys.
+    #[serde(default)]
+    profile_hotkeys: ProfileHotkeysCfg,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -568,6 +727,65 @@ struct MidiGlobalCfg {
     preferred_device_contains: Option<String>,
     #[serde(default)]
     channel: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ProfilePreset {
+    /// Back-compat: { "u_gain": 1.0, "u_zoom": 2.0 }
+    Legacy(HashMap<String, f32>),
+
+    /// New:
+    /// {
+    ///   "uniforms": { "u_gain": 1.0 },
+    ///   "midi": { "preferred_device_contains": "akai", "channel": 0 },
+    ///   "cc_overrides": { "u_gain": 12, "u_zoom": 13 }
+    /// }
+    V2(ProfilePresetV2),
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ProfilePresetV2 {
+    #[serde(default)]
+    uniforms: HashMap<String, f32>,
+    #[serde(default)]
+    midi: Option<MidiGlobalCfg>,
+    #[serde(default)]
+    cc_overrides: HashMap<String, u8>,
+}
+
+impl ProfilePreset {
+    fn uniforms(&self) -> HashMap<String, f32> {
+        match self {
+            ProfilePreset::Legacy(m) => m.clone(),
+            ProfilePreset::V2(v) => v.uniforms.clone(),
+        }
+    }
+
+    fn midi_override(&self) -> Option<MidiGlobalCfg> {
+        match self {
+            ProfilePreset::Legacy(_) => None,
+            ProfilePreset::V2(v) => v.midi.clone(),
+        }
+    }
+
+    fn cc_overrides(&self) -> HashMap<String, u8> {
+        match self {
+            ProfilePreset::Legacy(_) => HashMap::new(),
+            ProfilePreset::V2(v) => v.cc_overrides.clone(),
+        }
+    }
+}
+
+fn merge_midi_cfg(base: &MidiGlobalCfg, ov: Option<MidiGlobalCfg>) -> MidiGlobalCfg {
+    if let Some(o) = ov {
+        MidiGlobalCfg {
+            preferred_device_contains: o.preferred_device_contains.or_else(|| base.preferred_device_contains.clone()),
+            channel: o.channel.or(base.channel),
+        }
+    } else {
+        base.clone()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -594,6 +812,33 @@ struct MidiBinding {
     channel: Option<u8>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ProfileHotkeysCfg {
+    /// Cycle forward through profiles (default: BracketRight)
+    #[serde(default = "default_profile_next")]
+    next: Vec<String>,
+    /// Cycle backward through profiles (default: BracketLeft)
+    #[serde(default = "default_profile_prev")]
+    prev: Vec<String>,
+    /// Optional direct bindings: { "lofi": ["KeyL"], "default": ["KeyD"] }
+    #[serde(default)]
+    set: HashMap<String, Vec<String>>,
+}
+
+fn default_profile_next() -> Vec<String> {
+    vec!["BracketRight".into()]
+}
+fn default_profile_prev() -> Vec<String> {
+    vec!["BracketLeft".into()]
+}
+
+#[derive(Debug, Clone)]
+enum ProfileAction {
+    Next,
+    Prev,
+    Set(String),
+}
+
 fn default_one() -> f32 {
     1.0
 }
@@ -617,32 +862,39 @@ struct ParamStore {
     mappings: HashMap<(u8, u8), ParamMapping>, // (channel, cc) -> mapping
 }
 
+
+fn normalize_midi_channel(ch: u8) -> u8 {
+    // Accept both 0-based (0..15) and 1-based (1..16) channels from JSON/GUI.
+    // - If user provides 1..16, treat it as MIDI channel 1..16 and normalize to 0..15.
+    // - If user provides 0..15, treat it as already normalized.
+    // - Any other value is passed through (allows internal wildcard 255).
+    match ch {
+        1..=16 => ch - 1,
+        0..=15 => ch,
+        _ => ch,
+    }
+}
+
+fn normalize_midi_channel_opt(ch: Option<u8>) -> Option<u8> {
+    ch.map(normalize_midi_channel)
+}
+
 impl ParamStore {
     fn new(pf: &ParamsFile) -> Self {
         let mut values = HashMap::new();
         let mut targets = HashMap::new();
         let mut smooth = HashMap::new();
-        let mut mappings = HashMap::new();
-
-        let global_chan = pf.midi.channel.unwrap_or(0);
 
         for p in &pf.params {
             values.insert(p.name.clone(), p.default);
             targets.insert(p.name.clone(), p.default);
             smooth.insert(p.name.clone(), p.smoothing);
+        }
 
-            if let Some(b) = &p.midi {
-                let ch = b.channel.unwrap_or(global_chan);
-                mappings.insert(
-                    (ch, b.cc),
-                    ParamMapping {
-                        name: p.name.clone(),
-                        min: p.min,
-                        max: p.max,
-                        smoothing: p.smoothing,
-                    },
-                );
-            }
+        let mappings = Self::build_mappings(pf, &pf.midi, &HashMap::new());
+        println!("[midi] mappings[startup] count={}", mappings.len());
+        for ((ch, cc), map) in mappings.iter().take(32) {
+            println!("[midi] map ch={} cc={} -> {} (min={} max={} smooth={})", ch, cc, map.name, map.min, map.max, map.smoothing);
         }
 
         Self {
@@ -653,13 +905,204 @@ impl ParamStore {
         }
     }
 
-    fn set_cc(&mut self, ch: u8, cc: u8, val_0_127: u8) {
+    fn build_mappings(
+        pf: &ParamsFile,
+        effective_midi: &MidiGlobalCfg,
+        cc_overrides: &HashMap<String, u8>,
+    ) -> HashMap<(u8, u8), ParamMapping> {
+        let mut mappings = HashMap::new();
+        let global_chan_opt = normalize_midi_channel_opt(effective_midi.channel);
+
+        for p in &pf.params {
+            if let Some(b) = &p.midi {
+                let ch_opt = normalize_midi_channel_opt(b.channel).or(global_chan_opt);
+                let cc = cc_overrides.get(&p.name).copied().unwrap_or(b.cc);
+
+                // If neither param nor global specify a channel, treat as wildcard.
+                let ch = ch_opt.unwrap_or(255);
+
+                mappings.insert(
+                    (ch, cc),
+                    ParamMapping {
+                        name: p.name.clone(),
+                        min: p.min,
+                        max: p.max,
+                        smoothing: p.smoothing,
+                    },
+                );
+            }
+        }
+
+        mappings
+    }
+
+
+    fn apply_params_file(
+        &mut self,
+        new_pf: &ParamsFile,
+        active_profile: Option<&str>,
+    ) -> MidiGlobalCfg {
+        // Preserve any currently "targeted" values (likely driven by MIDI),
+        // but refresh defaults (and create/remove params) from the new file.
+        let old_targets = self.targets.clone();
+
+        let mut new_values: HashMap<String, f32> = HashMap::new();
+        let mut new_targets: HashMap<String, f32> = HashMap::new();
+        let mut new_smooth: HashMap<String, f32> = HashMap::new();
+
+        // Base MIDI settings from the file (profile can override later)
+        let base_midi = new_pf.midi.clone();
+
+        // Base mappings from the new file (profile can override CCs later)
+        let mut effective_midi = base_midi.clone();
+        let mut cc_overrides: HashMap<String, u8> = HashMap::new();
+
+        for p in &new_pf.params {
+            let name = p.name.clone();
+
+            // If this param was being targeted (e.g. active MIDI input), keep current/target.
+            if let Some(t) = old_targets.get(&name).copied() {
+                let cur = *self.values.get(&name).unwrap_or(&t);
+                new_values.insert(name.clone(), cur);
+                new_targets.insert(name.clone(), t);
+                new_smooth.insert(
+                    name.clone(),
+                    *self.smooth.get(&name).unwrap_or(&p.smoothing),
+                );
+            } else {
+                new_values.insert(name.clone(), p.default);
+                new_targets.insert(name.clone(), p.default);
+                new_smooth.insert(name.clone(), p.smoothing);
+            }
+        }
+
+        self.values = new_values;
+        self.targets = new_targets;
+        self.smooth = new_smooth;
+
+        // If there is an active profile, it can override uniforms AND MIDI settings.
+        if let Some(profile) = active_profile {
+            if let Some(preset) = new_pf.profiles.get(profile) {
+                effective_midi = merge_midi_cfg(&base_midi, preset.midi_override());
+                cc_overrides = preset.cc_overrides();
+
+                // Apply uniform overrides
+                for (k, v) in preset.uniforms() {
+                    self.values.insert(k.clone(), v);
+                    self.targets.insert(k.clone(), v);
+                }
+
+                println!("[params] applied profile: {profile}");
+            } else {
+                eprintln!("[params] profile not found: {profile}");
+            }
+        }
+
+        self.mappings = Self::build_mappings(new_pf, &effective_midi, &cc_overrides);
+        println!("[midi] mappings[params_reload] count={}", self.mappings.len());
+        for ((ch, cc), map) in self.mappings.iter().take(32) {
+            println!("[midi] map ch={} cc={} -> {} (min={} max={} smooth={})", ch, cc, map.name, map.min, map.max, map.smoothing);
+        }
+
+        effective_midi
+    }
+
+    
+    fn apply_profile(
+        &mut self,
+        pf: &ParamsFile,
+        assets: &std::path::Path,
+        shader_frag: Option<&std::path::Path>,
+        profile_name: &str,
+    ) -> MidiGlobalCfg {
+        // Resolve preset from per-shader profiles first (if present), otherwise fall back to global `profiles`.
+        let mut preset_opt: Option<&ProfilePreset> = None;
+
+        if let Some(shader_path) = shader_frag {
+            // Find the matching shader key by resolving keys relative to assets/
+            for (k, per_shader) in &pf.shader_profiles {
+                let resolved = resolve_assets_path(assets, k);
+                if resolved == shader_path {
+                    preset_opt = per_shader.get(profile_name);
+                    break;
+                }
+            }
+        }
+
+        if preset_opt.is_none() {
+            preset_opt = pf.profiles.get(profile_name);
+        }
+
+        if let Some(preset) = preset_opt {
+            // 1) Apply uniform values
+            let uniforms = preset.uniforms();
+            for (k, v) in &uniforms {
+                self.values.insert(k.clone(), *v);
+                self.targets.insert(k.clone(), *v);
+            }
+
+            // 2) Apply MIDI overrides for this profile (device/channel) and rebuild CC mapping table
+            let effective_midi = merge_midi_cfg(&pf.midi, preset.midi_override());
+            let cc_overrides = preset.cc_overrides();
+            self.mappings = Self::build_mappings(pf, &effective_midi, &cc_overrides);
+            println!("[midi] mappings[profile_apply] count={}", self.mappings.len());
+            for ((ch, cc), map) in self.mappings.iter().take(32) {
+                println!("[midi] map ch={} cc={} -> {} (min={} max={} smooth={})", ch, cc, map.name, map.min, map.max, map.smoothing);
+            }
+
+            if let Some(shader_path) = shader_frag {
+                println!("[params] applied profile: {profile_name} (shader: {})", shader_path.display());
+            } else {
+                println!("[params] applied profile: {profile_name}");
+            }
+
+            effective_midi
+        } else {
+            eprintln!("[params] profile not found: {profile_name} (keeping existing MIDI mappings)");
+            // Do NOT clobber mappings here; keep last-good routing.
+            pf.midi.clone()
+        }
+    }
+
+    fn set_cc(&mut self, ch: u8, cc: u8, val_0_127: u8) -> bool {
+        // Primary: exact channel+cc match
         if let Some(map) = self.mappings.get(&(ch, cc)) {
             let x = (val_0_127 as f32) / 127.0;
             let t = map.min + (map.max - map.min) * x;
             self.targets.insert(map.name.clone(), t);
             self.smooth.insert(map.name.clone(), map.smoothing);
+            return true;
         }
+
+        // Secondary: wildcard channel (255) for this CC
+        if let Some(map) = self.mappings.get(&(255, cc)) {
+            let x = (val_0_127 as f32) / 127.0;
+            let t = map.min + (map.max - map.min) * x;
+            self.targets.insert(map.name.clone(), t);
+            self.smooth.insert(map.name.clone(), map.smoothing);
+            return true;
+        }
+
+        // Tertiary: CC-only fallback (if there is exactly one mapping for this CC, use it).
+        // This prevents "mapped=false" black-holing when a device reports a different channel than expected.
+        let mut found: Option<&ParamMapping> = None;
+        for ((_, c), map) in &self.mappings {
+            if *c == cc {
+                if found.is_some() {
+                    return false; // ambiguous
+                }
+                found = Some(map);
+            }
+        }
+        if let Some(map) = found {
+            let x = (val_0_127 as f32) / 127.0;
+            let t = map.min + (map.max - map.min) * x;
+            self.targets.insert(map.name.clone(), t);
+            self.smooth.insert(map.name.clone(), map.smoothing);
+            return true;
+        }
+
+        false
     }
 
     fn tick(&mut self) {
@@ -1438,7 +1881,7 @@ fn pick_platform_json(assets: &Path, stem: &str) -> PathBuf {
 }
 
 
-fn connect_midi(pf: &ParamsFile, store: Arc<Mutex<ParamStore>>) -> Option<midir::MidiInputConnection<()>> {
+fn connect_midi(midi: &MidiGlobalCfg, store: Arc<Mutex<ParamStore>>) -> Option<midir::MidiInputConnection<()>> {
     let mut midi_in = MidiInput::new("shadecore-midi").ok()?;
     midi_in.ignore(Ignore::None);
 
@@ -1448,8 +1891,7 @@ fn connect_midi(pf: &ParamsFile, store: Arc<Mutex<ParamStore>>) -> Option<midir:
         return None;
     }
 
-    let preferred = pf
-        .midi
+    let preferred = midi
         .preferred_device_contains
         .as_ref()
         .map(|s| s.to_lowercase());
@@ -1479,10 +1921,20 @@ fn connect_midi(pf: &ParamsFile, store: Arc<Mutex<ParamStore>>) -> Option<midir:
                 let ch = msg[0] & 0x0F;
                 let cc = msg[1];
                 let val = msg[2];
+
+                // Debug logging: print the first N CC messages, and always print unmapped CCs.
+                static MIDI_LOG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                let n = MIDI_LOG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                let mut mapped = false;
                 if let Ok(mut s) = store.lock() {
-                    s.set_cc(ch, cc, val);
+                    mapped = s.set_cc(ch, cc, val);
                 }
-            }
+
+                if n < 80 || !mapped {
+                    println!("[midi:in] ch={} cc={} val={} mapped={}", ch, cc, val, mapped);
+                }
+                          }
         },
         (),
     );
@@ -1584,6 +2036,15 @@ fn set_u_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i3
 struct RenderSel {
     frag_path: std::path::PathBuf,
     present_frag_path: std::path::PathBuf,
+    /// Optional list of fragment shader variants to cycle with hotkeys.
+    /// If empty, falls back to `frag_path`.
+    frag_variants: Vec<std::path::PathBuf>,
+    /// Active index within `frag_variants`.
+    frag_idx: usize,
+
+    /// Optional mapping from a frag variant path -> params profile name.
+    /// Used to make "MIDI + uniforms per shader" automatic.
+    frag_profile_map: std::collections::HashMap<std::path::PathBuf, String>,
 }
 
 /// Optional render config (assets/render.json) for hot-swapping shaders without changing code.
@@ -1598,6 +2059,22 @@ struct RenderSel {
 struct RenderJson {
     #[serde(default)]
     frag: Option<String>,
+
+    /// Optional list of fragment shader variants.
+    /// Example: { "frag_variants": ["shaders/a.frag", "shaders/b.frag"] }
+    #[serde(default)]
+    frag_variants: Option<Vec<String>>,
+
+    /// Optional active fragment selection by exact string match against entries in `frag_variants`.
+    #[serde(default)]
+    active_frag: Option<String>,
+
+    /// Optional mapping from frag variant string -> params profile name.
+    /// Example:
+    /// { "frag_profile_map": { "shaders/a.frag": "lofi", "shaders/b.frag": "crunch" } }
+    #[serde(default)]
+    frag_profile_map: Option<std::collections::HashMap<String, String>>,
+
     #[serde(default)]
     present_frag: Option<String>,
 }
@@ -1621,23 +2098,78 @@ fn load_render_sel(assets: &std::path::Path) -> RenderSel {
         Ok(s) => s,
         Err(_) => {
             return RenderSel {
-                frag_path: default_frag,
-                present_frag_path: default_present,
+                frag_path: default_frag.clone(),
+                present_frag_path: default_present.clone(),
+                frag_variants: vec![default_frag],
+                frag_idx: 0,
+                frag_profile_map: std::collections::HashMap::new(),
             }
         }
     };
 
     match serde_json::from_str::<RenderJson>(&data) {
         Ok(rj) => {
-            let frag_path = rj.frag.as_deref().map(|s| resolve_assets_path(assets, s)).unwrap_or(default_frag);
-            let present_frag_path = rj.present_frag.as_deref().map(|s| resolve_assets_path(assets, s)).unwrap_or(default_present);
-            RenderSel { frag_path, present_frag_path }
+            // Build fragment variants list (optional).
+            let mut frag_variants: Vec<std::path::PathBuf> = Vec::new();
+            if let Some(list) = rj.frag_variants.as_ref() {
+                for s in list {
+                    frag_variants.push(resolve_assets_path(assets, s));
+                }
+            }
+            if frag_variants.is_empty() {
+                // Back-compat: single `frag` string.
+                let single = rj
+                    .frag
+                    .as_deref()
+                    .map(|s| resolve_assets_path(assets, s))
+                    .unwrap_or_else(|| default_frag.clone());
+                frag_variants.push(single);
+            }
+
+            // Choose active index by matching `active_frag` (exact string match on the original entries),
+            // otherwise default to 0.
+            let mut frag_idx: usize = 0;
+            if let (Some(active), Some(list)) = (rj.active_frag.as_ref(), rj.frag_variants.as_ref()) {
+                if let Some(pos) = list.iter().position(|s| s == active) {
+                    frag_idx = pos.min(frag_variants.len().saturating_sub(1));
+                }
+            }
+
+            let frag_path = frag_variants
+                .get(frag_idx)
+                .cloned()
+                .unwrap_or_else(|| default_frag.clone());
+
+            let present_frag_path = rj
+                .present_frag
+                .as_deref()
+                .map(|s| resolve_assets_path(assets, s))
+                .unwrap_or_else(|| default_present.clone());
+
+            // Optional frag->profile mapping
+            let mut frag_profile_map: std::collections::HashMap<std::path::PathBuf, String> = std::collections::HashMap::new();
+            if let Some(map) = rj.frag_profile_map.as_ref() {
+                for (k, v) in map {
+                    frag_profile_map.insert(resolve_assets_path(assets, k), v.clone());
+                }
+            }
+
+            RenderSel {
+                frag_path,
+                present_frag_path,
+                frag_variants,
+                frag_idx,
+                frag_profile_map,
+            }
         }
         Err(e) => {
             eprintln!("[render] Failed to parse render.json ({}) - using defaults. Error: {e}", render_cfg.display());
             RenderSel {
-                frag_path: default_frag,
-                present_frag_path: default_present,
+                frag_path: default_frag.clone(),
+                present_frag_path: default_present.clone(),
+                frag_variants: vec![default_frag],
+                frag_idx: 0,
+                frag_profile_map: std::collections::HashMap::new(),
             }
         }
     }
@@ -1656,6 +2188,9 @@ fn main() {
 
     let render_cfg_path = assets.join("render.json");
     let mut render_sel = load_render_sel(&assets);
+    let mut frag_variants = render_sel.frag_variants.clone();
+    let mut frag_profile_map = render_sel.frag_profile_map.clone();
+    let mut frag_variant_idx = render_sel.frag_idx;
     let mut frag_path = render_sel.frag_path.clone();
     let mut present_frag_path = render_sel.present_frag_path.clone();
     let params_path = pick_platform_json(&assets, "params");
@@ -1675,11 +2210,31 @@ fn main() {
     let present_frag_src = read_to_string(&present_frag_path);
 
     let params_src = read_to_string(&params_path);
-    let pf: ParamsFile = serde_json::from_str(&params_src)
+    let mut pf: ParamsFile = serde_json::from_str(&params_src)
         .unwrap_or_else(|e| panic!("Failed to parse {}: {e}", params_path.display()));
     println!("[params] loaded version {}", pf.version);
 
+    // Choose an initial active profile:
+    // 1) explicit active_profile
+    // 2) "default" if present
+    // 3) first profile (sorted) if present
+    let mut active_profile: Option<String> =
+        pick_active_profile_for_shader(&pf, &assets, &frag_path);
+    if let Some(p) = &active_profile {
+        println!("[params] active profile: {p}");
+    }
+
     let store = Arc::new(Mutex::new(ParamStore::new(&pf)));
+
+    // Apply the active params profile (which can also override MIDI settings / CC mapping).
+    let mut effective_midi = pf.midi.clone();
+    if let Some(p) = active_profile.as_deref() {
+        effective_midi = store.lock().unwrap().apply_profile(&pf, &assets, Some(&frag_path), p);
+    }
+
+let mut profile_hotkeys = build_profile_hotkey_map(&pf);
+    let mut profile_names = sorted_profile_names_for_shader(&pf, &assets, &frag_path);
+
 
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build().expect("EventLoop::with_user_event failed");
 let event_proxy = event_loop.create_proxy();
@@ -1696,10 +2251,11 @@ let event_proxy = event_loop.create_proxy();
     std::thread::spawn(move || {
         use notify::{RecursiveMode, Watcher};
 
-        let interesting: [&OsStr; 3] = [
+        let interesting: [&OsStr; 4] = [
             OsStr::new("recording.json"),
             OsStr::new("recording.profiles.json"),
             OsStr::new("render.json"),
+            OsStr::new("params.json"),
         ];
 
         let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
@@ -1823,7 +2379,7 @@ let event_proxy = event_loop.create_proxy();
     let size = window.inner_size();
     let mut rt = unsafe { create_render_target(&gl, size.width as i32, size.height as i32) };
 
-    let _midi_conn_in = connect_midi(&pf, store.clone());
+    let mut midi_conn_in = connect_midi(&effective_midi, store.clone());
 
     let default_mode = if cfg!(target_os = "windows") {
         OutputMode::Spout
@@ -1940,6 +2496,7 @@ let mut recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
     let mut render_cfg_mtime = file_mtime(&render_cfg_path);
     let mut frag_mtime = file_mtime(&frag_path);
     let mut present_frag_mtime = file_mtime(&present_frag_path);
+    let mut params_mtime = file_mtime(&params_path);
 
 let mut rec_rt: Option<RenderTarget> = None;
 let mut rec_pbos: Option<[glow::NativeBuffer; 2]> = None;
@@ -1970,7 +2527,81 @@ let mut stream = StreamSender::new(stream_cfg.clone());
                             if let PhysicalKey::Code(code) = event.physical_key {
                                 println!("[key] pressed: {:?}", code);
 
-                                if let Some(action) = recording_hotkeys.get(&code).copied() {
+                                // --- Profile hotkeys (params.json) ---
+                                if let Some(pact) = profile_hotkeys.get(&code).cloned() {
+                                    if profile_names.is_empty() {
+                                        println!("[params] no profiles defined");
+                                    } else {
+                                        let cur_name = active_profile.clone().unwrap_or_else(|| profile_names[0].clone());
+                                        let cur_idx = profile_names.iter().position(|n| n == &cur_name).unwrap_or(0);
+
+                                        let next_name = match pact {
+                                            ProfileAction::Next => {
+                                                profile_names[(cur_idx + 1) % profile_names.len()].clone()
+                                            }
+                                            ProfileAction::Prev => {
+                                                profile_names[(cur_idx + profile_names.len() - 1) % profile_names.len()].clone()
+                                            }
+                                            ProfileAction::Set(n) => n,
+                                        };
+
+                                        active_profile = Some(next_name.clone());
+                                        // Persist the selection in memory (you can also write it back to params.json later if desired)
+                                        set_active_profile_for_shader(&mut pf, &assets, &frag_path, &next_name);
+                                        pf.active_profile = active_profile.clone();
+
+                                        effective_midi = store.lock().unwrap().apply_profile(&pf, &assets, Some(&frag_path), &next_name);
+                                        midi_conn_in = connect_midi(&effective_midi, store.clone());
+                                    }
+                                }
+
+                                
+                                // --- Fragment shader variant hotkeys (render.json) ---
+// User requested ; and ' for cycling. On some ISO/UK/IE layouts the physical keycodes
+// can differ, so we accept a small alias set.
+//
+// Next: Quote (')  OR Period (.) OR Backquote (`)
+// Prev: Semicolon (;) OR Comma (,) OR IntlBackslash (\)
+let is_next = matches!(code, KeyCode::Quote | KeyCode::Period | KeyCode::Backquote);
+let is_prev = matches!(code, KeyCode::Semicolon | KeyCode::Comma | KeyCode::IntlBackslash);
+
+if is_next || is_prev {
+    if frag_variants.len() <= 1 {
+        println!("[render] no frag_variants (or only one). Add `frag_variants` to render.json to enable cycling.");
+    } else {
+        if is_next {
+            frag_variant_idx = (frag_variant_idx + 1) % frag_variants.len();
+        } else {
+            frag_variant_idx = (frag_variant_idx + frag_variants.len() - 1) % frag_variants.len();
+        }
+
+        frag_path = frag_variants[frag_variant_idx].clone();
+
+        // When switching shaders, also switch to that shader's active profile (and rebuild MIDI mappings).
+        active_profile = pick_active_profile_for_shader(&pf, &assets, &frag_path);
+        if let Some(pname) = active_profile.clone() {
+            println!("[params] shader switch -> profile: {}", pname);
+            set_active_profile_for_shader(&mut pf, &assets, &frag_path, &pname);
+            effective_midi = store.lock().unwrap().apply_profile(&pf, &assets, Some(&frag_path), &pname);
+            midi_conn_in = connect_midi(&effective_midi, store.clone());
+        } else {
+            println!("[params] shader switch -> no profiles found (keeping existing mappings)");
+        }
+
+        // Force shader reload next tick (even if the file didn't change on disk).
+        frag_mtime = None;
+        configs_dirty = true;
+
+        println!(
+            "[render] frag variant -> {} ({} / {})",
+            frag_path.display(),
+                                            frag_variant_idx + 1,
+                                            frag_variants.len()
+                                        );
+                                    }
+                                }
+
+if let Some(action) = recording_hotkeys.get(&code).copied() {
                                     println!("[recording] hotkey pressed: {:?} -> {:?}", code, action);
                                     match action {
                                         RecHotkeyAction::Toggle => {
@@ -2328,6 +2959,9 @@ if recorder.is_recording() {
                             if new_render_mtime.is_some() && new_render_mtime != render_cfg_mtime {
                                 render_cfg_mtime = new_render_mtime;
                                 render_sel = load_render_sel(&assets);
+                                frag_variants = render_sel.frag_variants.clone();
+                                frag_profile_map = render_sel.frag_profile_map.clone();
+                                frag_variant_idx = render_sel.frag_idx;
                                 if render_sel.frag_path != frag_path {
                                     frag_path = render_sel.frag_path.clone();
                                     selection_changed = true;
@@ -2341,6 +2975,17 @@ if recorder.is_recording() {
                                     println!("[render] present_frag -> {}", present_frag_path.display());
                                 }
                             }
+
+                                // If render.json defines a frag->profile mapping, apply it on selection changes too.
+                                if let Some(pname) = frag_profile_map.get(&frag_path).cloned() {
+                                    println!("[params] frag mapped -> profile: {}", pname);
+                                    active_profile = Some(pname.clone());
+                                    set_active_profile_for_shader(&mut pf, &assets, &frag_path, &pname);
+// (legacy) pf.active_profile no longer used; per-shader active profile is stored in active_shader_profiles
+                                    effective_midi = store.lock().unwrap().apply_profile(&pf, &assets, Some(&frag_path), &pname);
+                                    midi_conn_in = connect_midi(&effective_midi, store.clone());
+                                }
+
 
                             // 2) Did the active frag file change?
                             let new_frag_mtime = file_mtime(&frag_path);
@@ -2377,6 +3022,44 @@ if recorder.is_recording() {
                             }
                         }
                         // --- end hot reload ---
+
+                        // --- Hot reload params.json (uniform defaults + profiles) ---
+                        {
+                            let new_params_mtime = file_mtime(&params_path);
+                            if new_params_mtime.is_some() && new_params_mtime != params_mtime {
+                                params_mtime = new_params_mtime;
+                                let params_src = read_to_string(&params_path);
+                                match serde_json::from_str::<ParamsFile>(&params_src) {
+                                    Ok(new_pf) => {
+                                        pf = new_pf;
+                                        println!("[params] reloaded version {}", pf.version);
+
+                                        // Re-resolve active profile (same precedence as startup).
+                                        let mut next_active: Option<String> = pf.active_profile.clone();
+                                        if next_active.is_none() && pf.profiles.contains_key("default") {
+                                            next_active = Some("default".to_string());
+                                        }
+                                        if next_active.is_none() {
+                                            let names = sorted_profile_names_for_shader(&pf, &assets, &frag_path);
+                                            if let Some(first) = names.first() {
+                                                next_active = Some(first.clone());
+                                            }
+                                        }
+                                        active_profile = next_active;
+
+                                        profile_hotkeys = build_profile_hotkey_map(&pf);
+                                        profile_names = sorted_profile_names_for_shader(&pf, &assets, &frag_path);
+
+                                        effective_midi = store.lock().unwrap().apply_params_file(&pf, active_profile.as_deref());
+                                        midi_conn_in = connect_midi(&effective_midi, store.clone());
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[params] reload failed (keeping previous): {e}");
+                                    }
+                                }
+                            }
+                        }
+
 
                         if recorder.is_recording() {
                             pending_reload = true;
