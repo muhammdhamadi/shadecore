@@ -11,6 +11,9 @@ markdown: kramdown
 kramdown:
   input: GFM
 
+url: "https://schwwaaa.github.io"
+baseurl: "/shadecore"
+
 permalink: pretty
 
 collections:
