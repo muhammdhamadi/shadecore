@@ -1,0 +1,8 @@
+{
+    "enabled": true,
+    "active_profile": "720p_fast_preview",
+    "hotkeys": {
+        "start": ["Digit9", "Numpad9", "PageUp"],
+        "stop": ["Digit0", "Numpad0", "Insert"]
+    }
+}
