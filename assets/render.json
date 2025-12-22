@@ -1,0 +1,4 @@
+{
+    "frag": "shaders/02-plasmawarp.frag",
+    "present_frag": "shaders/present.frag"
+}

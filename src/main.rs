@@ -1527,6 +1527,50 @@ unsafe fn compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) ->
     program
 }
 
+unsafe fn try_compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str) -> anyhow::Result<glow::NativeProgram> {
+    let vs = gl.create_shader(glow::VERTEX_SHADER).map_err(|e| anyhow::anyhow!("create vertex shader: {e}"))?;
+    gl.shader_source(vs, vert_src);
+    gl.compile_shader(vs);
+    if !gl.get_shader_compile_status(vs) {
+        let log = gl.get_shader_info_log(vs);
+        gl.delete_shader(vs);
+        return Err(anyhow::anyhow!("Vertex shader compile error:\n{log}"));
+    }
+
+    let fs = gl.create_shader(glow::FRAGMENT_SHADER).map_err(|e| anyhow::anyhow!("create fragment shader: {e}"))?;
+    gl.shader_source(fs, frag_src);
+    gl.compile_shader(fs);
+    if !gl.get_shader_compile_status(fs) {
+        let log = gl.get_shader_info_log(fs);
+        gl.delete_shader(vs);
+        gl.delete_shader(fs);
+        return Err(anyhow::anyhow!("Fragment shader compile error:\n{log}"));
+    }
+
+    let program = gl.create_program().map_err(|e| anyhow::anyhow!("create program: {e}"))?;
+    gl.attach_shader(program, vs);
+    gl.attach_shader(program, fs);
+    gl.link_program(program);
+
+    if !gl.get_program_link_status(program) {
+        let log = gl.get_program_info_log(program);
+        gl.detach_shader(program, vs);
+        gl.detach_shader(program, fs);
+        gl.delete_shader(vs);
+        gl.delete_shader(fs);
+        gl.delete_program(program);
+        return Err(anyhow::anyhow!("Program link error:\n{log}"));
+    }
+
+    gl.detach_shader(program, vs);
+    gl.detach_shader(program, fs);
+    gl.delete_shader(vs);
+    gl.delete_shader(fs);
+
+    Ok(program)
+}
+
+
 // NOTE: glow uniform calls are unsafe in your build; wrap them here.
 fn set_u_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i32) {
     unsafe {
@@ -1537,6 +1581,72 @@ fn set_u_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i3
 }
 
 #[derive(Debug, Clone)]
+struct RenderSel {
+    frag_path: std::path::PathBuf,
+    present_frag_path: std::path::PathBuf,
+}
+
+/// Optional render config (assets/render.json) for hot-swapping shaders without changing code.
+/// If the file is missing or invalid, we fall back to defaults.
+///
+/// Example:
+/// {
+///   "frag": "shaders/shader_kaleido.frag",
+///   "present_frag": "shaders/present.frag"
+/// }
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RenderJson {
+    #[serde(default)]
+    frag: Option<String>,
+    #[serde(default)]
+    present_frag: Option<String>,
+}
+
+fn resolve_assets_path(assets: &std::path::Path, s: &str) -> std::path::PathBuf {
+    let p = std::path::PathBuf::from(s);
+    if p.is_absolute() {
+        p
+    } else {
+        assets.join(p)
+    }
+}
+
+fn load_render_sel(assets: &std::path::Path) -> RenderSel {
+    // defaults (what already works)
+    let default_frag = assets.join("shaders").join("default.frag");
+    let default_present = assets.join("shaders").join("present.frag");
+    let render_cfg = assets.join("render.json");
+
+    let data = match std::fs::read_to_string(&render_cfg) {
+        Ok(s) => s,
+        Err(_) => {
+            return RenderSel {
+                frag_path: default_frag,
+                present_frag_path: default_present,
+            }
+        }
+    };
+
+    match serde_json::from_str::<RenderJson>(&data) {
+        Ok(rj) => {
+            let frag_path = rj.frag.as_deref().map(|s| resolve_assets_path(assets, s)).unwrap_or(default_frag);
+            let present_frag_path = rj.present_frag.as_deref().map(|s| resolve_assets_path(assets, s)).unwrap_or(default_present);
+            RenderSel { frag_path, present_frag_path }
+        }
+        Err(e) => {
+            eprintln!("[render] Failed to parse render.json ({}) - using defaults. Error: {e}", render_cfg.display());
+            RenderSel {
+                frag_path: default_frag,
+                present_frag_path: default_present,
+            }
+        }
+    }
+}
+
+fn file_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 enum AppEvent {
     ConfigChanged,
 }
@@ -1544,12 +1654,15 @@ enum AppEvent {
 fn main() {
     let assets = find_assets_base();
 
-    let frag_path = assets.join("shaders").join("default.frag");
-    let present_frag_path = assets.join("shaders").join("present.frag");
+    let render_cfg_path = assets.join("render.json");
+    let mut render_sel = load_render_sel(&assets);
+    let mut frag_path = render_sel.frag_path.clone();
+    let mut present_frag_path = render_sel.present_frag_path.clone();
     let params_path = pick_platform_json(&assets, "params");
     let output_cfg_path = pick_platform_json(&assets, "output");
 
     println!("[assets] base: {}", assets.display());
+    println!("[assets] render: {}", render_cfg_path.display());
     println!("[assets] frag: {}", frag_path.display());
     println!("[assets] present: {}", present_frag_path.display());
     println!("[assets] params: {}", params_path.display());
@@ -1602,6 +1715,10 @@ let event_proxy = event_loop.create_proxy();
 
                     // Watch the directory, then filter by filename so "atomic save" (rename) is handled.
                     let hit = ev.paths.iter().any(|p| {
+                        // accept any .frag change (shader hot-reload), and a few JSON configs
+                        if p.extension().and_then(|e| e.to_str()) == Some("frag") {
+                            return true;
+                        }
                         p.file_name()
                             .is_some_and(|name| interesting.iter().any(|want| name == *want))
                     });
@@ -1630,6 +1747,14 @@ let event_proxy = event_loop.create_proxy();
             eprintln!("[watch] failed to watch assets dir {}: {e}", assets_dir_for_watch.display());
             return;
         }
+        let shaders_dir = assets_dir_for_watch.join("shaders");
+        if shaders_dir.is_dir() {
+            if let Err(e) = watcher.watch(&shaders_dir, RecursiveMode::NonRecursive) {
+                eprintln!("[watch] failed to watch shaders dir {}: {e}", shaders_dir.display());
+                // not fatal; we can still watch assets/
+            }
+        }
+
 
         // keep thread alive
         loop { std::thread::sleep(Duration::from_secs(3600)); }
@@ -1691,8 +1816,8 @@ let event_proxy = event_loop.create_proxy();
         })
     };
 
-    let program = unsafe { compile_program(&gl, VERT_SRC, &frag_src) };
-    let present_program = unsafe { compile_program(&gl, VERT_SRC, &present_frag_src) };
+    let mut program = unsafe { compile_program(&gl, VERT_SRC, &frag_src) };
+    let mut present_program = unsafe { compile_program(&gl, VERT_SRC, &present_frag_src) };
     let vao = unsafe { gl.create_vertex_array().expect("create_vertex_array failed") };
 
     let size = window.inner_size();
@@ -1810,6 +1935,11 @@ let mut recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
     let mut recorder = Recorder::new(recording_cfg.clone());
     let mut configs_dirty: bool = false;
     let mut pending_reload: bool = false;
+
+    // Hot-reload stamps (best-effort). If missing, we still attempt reload on change events.
+    let mut render_cfg_mtime = file_mtime(&render_cfg_path);
+    let mut frag_mtime = file_mtime(&frag_path);
+    let mut present_frag_mtime = file_mtime(&present_frag_path);
 
 let mut rec_rt: Option<RenderTarget> = None;
 let mut rec_pbos: Option<[glow::NativeBuffer; 2]> = None;
@@ -2189,6 +2319,65 @@ if recorder.is_recording() {
                 Event::AboutToWait => {
                     if configs_dirty {
                         configs_dirty = false;
+                        // --- Hot reload shaders (frag + present) and shader selection (render.json) ---
+                        // We never crash on shader errors here: if compilation fails, we keep the last good program.
+                        {
+                            // 1) Did render.json change? If so, reload selection (swap shader paths).
+                            let new_render_mtime = file_mtime(&render_cfg_path);
+                            let mut selection_changed = false;
+                            if new_render_mtime.is_some() && new_render_mtime != render_cfg_mtime {
+                                render_cfg_mtime = new_render_mtime;
+                                render_sel = load_render_sel(&assets);
+                                if render_sel.frag_path != frag_path {
+                                    frag_path = render_sel.frag_path.clone();
+                                    selection_changed = true;
+                                    frag_mtime = None; // force reload
+                                    println!("[render] frag -> {}", frag_path.display());
+                                }
+                                if render_sel.present_frag_path != present_frag_path {
+                                    present_frag_path = render_sel.present_frag_path.clone();
+                                    selection_changed = true;
+                                    present_frag_mtime = None; // force reload
+                                    println!("[render] present_frag -> {}", present_frag_path.display());
+                                }
+                            }
+
+                            // 2) Did the active frag file change?
+                            let new_frag_mtime = file_mtime(&frag_path);
+                            if selection_changed || (new_frag_mtime.is_some() && new_frag_mtime != frag_mtime) {
+                                frag_mtime = new_frag_mtime;
+                                let new_src = read_to_string(&frag_path);
+                                match unsafe { try_compile_program(&gl, VERT_SRC, &new_src) } {
+                                    Ok(new_prog) => unsafe {
+                                        gl.delete_program(program);
+                                        program = new_prog;
+                                        println!("[hot] reloaded frag: {}", frag_path.display());
+                                    },
+                                    Err(e) => {
+                                        eprintln!("[hot] frag compile failed (keeping previous): {e:?}");
+                                    }
+                                }
+                            }
+
+                            // 3) Did the present frag file change?
+                            let new_present_mtime = file_mtime(&present_frag_path);
+                            if selection_changed || (new_present_mtime.is_some() && new_present_mtime != present_frag_mtime) {
+                                present_frag_mtime = new_present_mtime;
+                                let new_src = read_to_string(&present_frag_path);
+                                match unsafe { try_compile_program(&gl, VERT_SRC, &new_src) } {
+                                    Ok(new_prog) => unsafe {
+                                        gl.delete_program(present_program);
+                                        present_program = new_prog;
+                                        println!("[hot] reloaded present frag: {}", present_frag_path.display());
+                                    },
+                                    Err(e) => {
+                                        eprintln!("[hot] present compile failed (keeping previous): {e:?}");
+                                    }
+                                }
+                            }
+                        }
+                        // --- end hot reload ---
+
                         if recorder.is_recording() {
                             pending_reload = true;
                             println!("[recording] config changed on disk; will reload after stop");
