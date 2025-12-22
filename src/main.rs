@@ -26,7 +26,7 @@ use recording::{Recorder, RecordingCfg};
 
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
+use winit::event_loop::{ControlFlow, EventLoopBuilder};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 /// -------------------------------
@@ -358,18 +358,126 @@ fn build_recording_hotkey_map(cfg: &RecordingCfg) -> HashMap<KeyCode, RecHotkeyA
 }
 
 fn load_recording_config(path: &Path) -> RecordingCfg {
+    // Backwards compatible loader:
+    // - If recording.json is a "controller" with active_profile + hotkeys, merge with recording.profiles.json.
+    // - Otherwise, treat recording.json as a full RecordingCfg (legacy single-profile format).
+    #[derive(Debug, Clone, Deserialize, Default)]
+    struct RecordingHotkeys {
+        #[serde(default)]
+        toggle: Vec<String>,
+        #[serde(default)]
+        start: Vec<String>,
+        #[serde(default)]
+        stop: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct RecordingController {
+        #[serde(default)]
+        enabled: bool,
+        #[serde(default)]
+        active_profile: Option<String>,
+        #[serde(default)]
+        hotkeys: RecordingHotkeys,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct RecordingProfilesFile {
+        #[serde(default)]
+        profiles: HashMap<String, RecordingProfile>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct RecordingProfile {
+        #[serde(default)]
+        out_dir: Option<PathBuf>,
+        #[serde(default)]
+        container: Option<recording::Container>,
+        #[serde(default)]
+        codec: Option<recording::Codec>,
+        #[serde(default)]
+        fps: Option<u32>,
+        #[serde(default)]
+        width: Option<u32>,
+        #[serde(default)]
+        height: Option<u32>,
+        #[serde(default)]
+        ffmpeg_path: Option<String>,
+        #[serde(default)]
+        h264_crf: Option<u32>,
+        #[serde(default)]
+        h264_preset: Option<String>,
+        #[serde(default)]
+        pix_fmt_out: Option<String>,
+        #[serde(default)]
+        prores_profile: Option<u32>,
+        #[serde(default)]
+        vflip: Option<bool>,
+    }
+
+    fn apply_profile(dst: &mut RecordingCfg, p: &RecordingProfile) {
+        if let Some(v) = &p.out_dir { dst.out_dir = v.clone(); }
+        if let Some(v) = p.container { dst.container = v; }
+        if let Some(v) = p.codec { dst.codec = v; }
+        if let Some(v) = p.fps { dst.fps = v; }
+        if let Some(v) = p.width { dst.width = v; }
+        if let Some(v) = p.height { dst.height = v; }
+        if let Some(v) = &p.ffmpeg_path { dst.ffmpeg_path = v.clone(); }
+        if let Some(v) = p.h264_crf { dst.h264_crf = v; }
+        if let Some(v) = &p.h264_preset { dst.h264_preset = v.clone(); }
+        if let Some(v) = &p.pix_fmt_out { dst.pix_fmt_out = v.clone(); }
+        if let Some(v) = p.prores_profile { dst.prores_profile = v; }
+        if let Some(v) = p.vflip { dst.vflip = v; }
+    }
+
     let default_cfg = RecordingCfg::default();
+
     let data = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(_) => {
-            println!("[recording] No recording config at {}. Using defaults (enabled=false).", path.display());
-            return default_cfg;
-        }
+        Err(_) => return default_cfg,
     };
+
+    // First try controller format.
+    if let Ok(controller) = serde_json::from_str::<RecordingController>(&data) {
+        if controller.active_profile.is_some() || !controller.hotkeys.start.is_empty() || !controller.hotkeys.stop.is_empty() || !controller.hotkeys.toggle.is_empty() {
+            let mut cfg = RecordingCfg::default();
+            cfg.enabled = controller.enabled;
+            cfg.toggle_keys = controller.hotkeys.toggle.clone();
+            cfg.start_keys = controller.hotkeys.start.clone();
+            cfg.stop_keys = controller.hotkeys.stop.clone();
+
+            // Load profiles file from the same assets directory.
+            let profiles_path = path.parent().unwrap_or_else(|| Path::new(".")).join("recording.profiles.json");
+            let profiles_data = std::fs::read_to_string(&profiles_path).ok();
+
+            if let (Some(active), Some(pdata)) = (controller.active_profile.clone(), profiles_data) {
+                match serde_json::from_str::<RecordingProfilesFile>(&pdata) {
+                    Ok(pf) => {
+                        if let Some(p) = pf.profiles.get(&active) {
+                            apply_profile(&mut cfg, p);
+                            println!(
+                                "[recording] active profile -> {} ({}x{}@{} {:?}/{:?})",
+                                active, cfg.width, cfg.height, cfg.fps, cfg.container, cfg.codec
+                            );
+                        } else {
+                            eprintln!("[recording] active_profile '{}' not found in {}", active, profiles_path.display());
+                        }
+                    }
+                    Err(e) => eprintln!("[recording] failed to parse {}: {e}", profiles_path.display()),
+                }
+            } else if controller.active_profile.is_some() {
+                eprintln!("[recording] active_profile set but {} missing/unreadable", profiles_path.display());
+            }
+
+            return cfg;
+        }
+    }
+
+    // Legacy: full RecordingCfg in recording.json
     match serde_json::from_str::<RecordingCfg>(&data) {
         Ok(cfg) => cfg,
         Err(e) => {
-            println!("[recording] Failed to parse {}: {e}. Using defaults.", path.display());
+            eprintln!("[recording] Failed to parse {}: {e}", path.display());
             default_cfg
         }
     }
@@ -1428,6 +1536,11 @@ fn set_u_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i3
     }
 }
 
+#[derive(Debug, Clone)]
+enum AppEvent {
+    ConfigChanged,
+}
+
 fn main() {
     let assets = find_assets_base();
 
@@ -1455,7 +1568,73 @@ fn main() {
 
     let store = Arc::new(Mutex::new(ParamStore::new(&pf)));
 
-    let event_loop = EventLoop::new().expect("EventLoop::new failed");
+    let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build().expect("EventLoop::with_user_event failed");
+let event_proxy = event_loop.create_proxy();
+
+// Watch config files and auto-reload when they change.
+// This makes JSON edits dynamic without rebuilding or restarting.
+{
+    use std::ffi::OsStr;
+    use std::time::Duration;
+
+    let assets_dir_for_watch = assets.clone();
+    let proxy_for_watch = event_proxy.clone();
+
+    std::thread::spawn(move || {
+        use notify::{RecursiveMode, Watcher};
+
+        let interesting: [&OsStr; 3] = [
+            OsStr::new("recording.json"),
+            OsStr::new("recording.profiles.json"),
+            OsStr::new("render.json"),
+        ];
+
+        let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+            match res {
+                Ok(ev) => {
+                    // Editors often emit multiple events (modify/create/remove/rename).
+                    use notify::EventKind;
+                    let kind_ok = matches!(ev.kind, EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_));
+
+                    if !kind_ok {
+                        return;
+                    }
+
+                    // Watch the directory, then filter by filename so "atomic save" (rename) is handled.
+                    let hit = ev.paths.iter().any(|p| {
+                        p.file_name()
+                            .is_some_and(|name| interesting.iter().any(|want| name == *want))
+                    });
+
+                    if hit {
+                        // Helpful: print what changed (best-effort).
+                        if let Some(p) = ev.paths.get(0) {
+                            eprintln!("[watch] config change detected: {}", p.display());
+                        } else {
+                            eprintln!("[watch] config change detected");
+                        }
+                        let _ = proxy_for_watch.send_event(AppEvent::ConfigChanged);
+                    }
+                }
+                Err(e) => eprintln!("[watch] notify error: {e}"),
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[watch] failed to create watcher: {e}");
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&assets_dir_for_watch, RecursiveMode::NonRecursive) {
+            eprintln!("[watch] failed to watch assets dir {}: {e}", assets_dir_for_watch.display());
+            return;
+        }
+
+        // keep thread alive
+        loop { std::thread::sleep(Duration::from_secs(3600)); }
+    });
+}
     let window_builder = winit::window::WindowBuilder::new()
         .with_title("shadecore")
         .with_inner_size(PhysicalSize::new(1280, 720));
@@ -1547,9 +1726,7 @@ println!(
     recording_cfg.out_dir.display(),
     recording_cfg.ffmpeg_path
 );
-let recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
-
-
+let mut recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
     let syphon_name = output_cfg
         .syphon
         .server_name
@@ -1631,6 +1808,9 @@ let recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
     let mut spout: Option<SpoutSender> = None;
 
     let mut recorder = Recorder::new(recording_cfg.clone());
+    let mut configs_dirty: bool = false;
+    let mut pending_reload: bool = false;
+
 let mut rec_rt: Option<RenderTarget> = None;
 let mut rec_pbos: Option<[glow::NativeBuffer; 2]> = None;
 let mut rec_pbo_index: usize = 0;
@@ -1648,6 +1828,10 @@ let mut stream = StreamSender::new(stream_cfg.clone());
             target.set_control_flow(ControlFlow::Poll);
 
             match event {
+                Event::UserEvent(AppEvent::ConfigChanged) => {
+                    configs_dirty = true;
+                }
+
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => target.exit(),
 
@@ -2003,6 +2187,53 @@ if recorder.is_recording() {
                 },
 
                 Event::AboutToWait => {
+                    if configs_dirty {
+                        configs_dirty = false;
+                        if recorder.is_recording() {
+                            pending_reload = true;
+                            println!("[recording] config changed on disk; will reload after stop");
+                        } else {
+                            let rec_path = assets.join("recording.json");
+                            let new_cfg = load_recording_config(&rec_path);
+                            recording_hotkeys = build_recording_hotkey_map(&new_cfg);
+                            recorder.set_cfg(new_cfg.clone());
+                            rec_rt = None;
+                            rec_pbos = None;
+                            rec_pbo_bytes = 0;
+                            rec_pbo_index = 0;
+                            rec_pbo_primed = false;
+                            println!(
+                                "[recording] reloaded: enabled={} {}x{}@{} {:?}/{:?}",
+                                new_cfg.enabled,
+                                new_cfg.width,
+                                new_cfg.height,
+                                new_cfg.fps,
+                                new_cfg.container,
+                                new_cfg.codec
+                            );
+                        }
+                    }
+                    if pending_reload && !recorder.is_recording() {
+                        pending_reload = false;
+                        let rec_path = assets.join("recording.json");
+                        let new_cfg = load_recording_config(&rec_path);
+                        recording_hotkeys = build_recording_hotkey_map(&new_cfg);
+                        recorder.set_cfg(new_cfg.clone());
+                        rec_rt = None;
+                        rec_pbos = None;
+                        rec_pbo_bytes = 0;
+                        rec_pbo_index = 0;
+                        rec_pbo_primed = false;
+                        println!(
+                            "[recording] reloaded after stop: enabled={} {}x{}@{} {:?}/{:?}",
+                            new_cfg.enabled,
+                            new_cfg.width,
+                            new_cfg.height,
+                            new_cfg.fps,
+                            new_cfg.container,
+                            new_cfg.codec
+                        );
+                    }
                     window.request_redraw();
                 }
 

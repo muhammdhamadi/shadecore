@@ -1,18 +1,8 @@
 {
-  "enabled": true,
-  "toggle_keys": [],
-  "start_keys": ["Numpad9"],
-  "stop_keys": ["Numpad0"],
-  "out_dir": "captures",
-  "container": "mp4",
-  "codec": "h264",
-  "fps": 60,
-  "width": 3840,
-  "height": 2160,
-  "ffmpeg_path": "ffmpeg",
-  "h264_crf": 18,
-  "h264_preset": "veryfast",
-  "pix_fmt_out": "yuv420p",
-  "prores_profile": 3,
-  "vflip": true
+    "enabled": true,
+    "active_profile": "4k_h264",
+    "hotkeys": {
+        "start": ["Digit9", "Numpad9", "PageUp"],
+        "stop": ["Digit0", "Numpad0", "Insert"]
+    }
 }

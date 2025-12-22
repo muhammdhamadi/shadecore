@@ -1,0 +1,39 @@
+{
+    "profiles": {
+        "4k_h264": {
+            "out_dir": "captures",
+            "container": "mp4",
+            "codec": "h264",
+            "fps": 60,
+            "width": 3840,
+            "height": 2160,
+            "ffmpeg_path": "ffmpeg",
+            "vflip": true,
+            "h264": { "crf": 18, "preset": "veryfast", "pix_fmt_out": "yuv420p" }
+        },
+
+        "1080p_prores": {
+            "out_dir": "captures",
+            "container": "mov",
+            "codec": "prores",
+            "fps": 60,
+            "width": 1920,
+            "height": 1080,
+            "ffmpeg_path": "ffmpeg",
+            "vflip": true,
+            "prores": { "profile": 3 }
+        },
+
+        "720p_fast_preview": {
+            "out_dir": "captures",
+            "container": "mp4",
+            "codec": "h264",
+            "fps": 60,
+            "width": 1280,
+            "height": 720,
+            "ffmpeg_path": "ffmpeg",
+            "vflip": true,
+            "h264": { "crf": 23, "preset": "ultrafast", "pix_fmt_out": "yuv420p" }
+        }
+    }
+}

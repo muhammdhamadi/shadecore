@@ -205,6 +205,12 @@ impl Recorder {
         &self.cfg
     }
 
+    /// Replace recording configuration (only safe when not recording).
+    pub fn set_cfg(&mut self, cfg: RecordingCfg) {
+        self.cfg = cfg;
+        self.buf_rgba.clear();
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.cfg.enabled
     }
