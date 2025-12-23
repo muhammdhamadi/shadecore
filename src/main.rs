@@ -2024,10 +2024,32 @@ unsafe fn try_compile_program(gl: &glow::Context, vert_src: &str, frag_src: &str
 
 
 // NOTE: glow uniform calls are unsafe in your build; wrap them here.
+//
+// We support multiple common uniform naming conventions so "random .frag packs"
+// work out of the box across ShaderToy/ISF-ish ports, etc.
 fn set_u_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i32) {
     unsafe {
+        // shadecore default / legacy
         if let Some(loc) = gl.get_uniform_location(prog, "u_resolution") {
             gl.uniform_2_f32(Some(&loc), w as f32, h as f32);
+        }
+        // camelCase variant (common in some packs)
+        if let Some(loc) = gl.get_uniform_location(prog, "uResolution") {
+            gl.uniform_2_f32(Some(&loc), w as f32, h as f32);
+        }
+        // ShaderToy-style
+        if let Some(loc) = gl.get_uniform_location(prog, "iResolution") {
+            gl.uniform_3_f32(Some(&loc), w as f32, h as f32, 1.0);
+        }
+    }
+}
+
+fn set_u_time(gl: &glow::Context, prog: glow::NativeProgram, t: f32) {
+    unsafe {
+        for name in ["u_time", "uTime", "iTime", "time"] {
+            if let Some(loc) = gl.get_uniform_location(prog, name) {
+                gl.uniform_1_f32(Some(&loc), t);
+            }
         }
     }
 }
@@ -2697,10 +2719,8 @@ if let Some(action) = recording_hotkeys.get(&code).copied() {
                             }
                         }
 
-                        if let Some(loc) = gl.get_uniform_location(program, "u_time") {
-                            let t = start.elapsed().as_secs_f32();
-                            gl.uniform_1_f32(Some(&loc), t);
-                        }
+                        let t = start.elapsed().as_secs_f32();
+                        set_u_time(&gl, program, t);
 
                         gl.draw_arrays(glow::TRIANGLES, 0, 3);
 
