@@ -7,7 +7,10 @@ title: shadecore Documentation
   <img width="45%" height="45%" src="https://github.com/schwwaaa/shadecore/blob/main/media/shadecore-logo.png?raw=true"/>  
 </p>
 
-<p align="center"><em>A native, high-performance GLSL rendering engine written in Rust, designed for real-time shader experimentation, hardware control, and live video routing.</em></p>
+<p align="center"><em>A native, high-performance GLSL live-coding engine written in Rust.</em></p>
+
+`shadecore` is designed to function as a **live-coded visual instrument**, where
+shaders, control mappings, and output routing remain mutable during execution.
 
 # Supported outputs
 - **FBO texture** (local window)

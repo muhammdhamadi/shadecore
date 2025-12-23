@@ -2,7 +2,7 @@
   <img width="45%" height="45%" src="https://github.com/schwwaaa/shadecore/blob/main/media/shadecore-logo.png?raw=true"/>  
 </p>
 
-<p align="center"><em>A native, high-performance GLSL rendering engine written in Rust, designed for real-time shader experimentation, hardware control, and live video routing.</em></p>
+<p align="center"><em>A native, high-performance GLSL live-coding engine written in Rust, designed for real-time shader manipulation, hardware control, and live video routing.</em></p>
 
 ---
 
@@ -48,6 +48,21 @@ It is equally suited for:
 
 ---
 
+## Live Coding Model
+
+While `shadecore` does not embed a traditional text editor, it is designed around a **live-coding workflow**.
+
+Shaders are written externally, but once running:
+
+- parameters are pre-declared and always “live”
+- MIDI mappings act as latent control bindings
+- routing, structure, and behavior can be reshaped in real time
+- no recompilation or UI-layer indirection is required
+
+This allows a performer to *play*, *reconfigure*, and *record* a shader as a live system.
+
+---
+
 ## Features
 
 - Native OpenGL rendering (via `glow`)
@@ -63,233 +78,10 @@ It is equally suited for:
 
 ---
 
-## Running the Project
-
-### Requirements
-
-- macOS or Windows  
-- Rust (stable toolchain)
-
-Platform-specific:
-
-- **macOS**
-  - Xcode Command Line Tools
-  - Syphon.framework is vendored (no install required)
-- **Windows**
-  - Visual Studio Build Tools (C++ workload)
-  - Spout2 is vendored
-- **Streaming**
-  - FFmpeg available in `PATH`
-  - or set `stream.ffmpeg_path` in `assets/output*.json`
-
----
-
-## Build & Run (Standard Engine)
-
-```bash
-cargo run
-```
-
-This will:
-
-- compile the engine
-- launch the OpenGL renderer
-- load:
-  - `assets/params.json`
-  - `assets/output.json`
-- open a local preview window (**always active**)
-
----
-
-## Output Routing
-
-Output behavior is controlled by `assets/output.json` (or alternate output configs).
-
-### Runtime Hotkeys (default)
-
-- `1` — Texture only (preview)
-- `2` — Syphon (macOS)
-- `3` — Spout2 (Windows)
-- `4` — Stream (FFmpeg RTSP / RTMP)
-- `6` — NDI (see below)
-
-Hotkeys are configurable in the output JSON.
-
----
-
-## ⚠️ NDI Output (Important)
-
-NDI is **not enabled in the default execution path**.
-
-This is intentional.
-
-### Why NDI Is Separate
-
-NDI requires:
-- a different runtime lifecycle,
-- different threading assumptions,
-- tighter timing guarantees.
-
-Rather than complicate the core render loop, NDI runs in a **dedicated execution mode**.
-
-### Running with NDI
-
-```bash
-cargo run --features ndi
-```
-
-or
-
-```bash
-cargo run --bin shadecore-ndi
-```
-
-Check `Cargo.toml` for the active NDI configuration.
-
-### NDI Notes
-
-- NDI output is discoverable by OBS, Resolume, and other NDI-capable software
-- Local preview still runs unless explicitly disabled
-- NDI uses its own output configuration file
-
-This separation is **by design**, not a limitation.
-
----
-
-## Project Structure
-
-```text
-shadecore/
-├─ src/
-│  └─ main.rs              # Core engine loop
-├─ native/
-│  ├─ spout_bridge/        # C++ Spout2 bridge (Windows)
-│  ├─ syphon_bridge.m      # Objective-C Syphon bridge (macOS)
-│  └─ syphon_bridge.h
-├─ vendor/
-│  └─ Syphon.framework     # Vendored macOS framework
-├─ assets/
-│  ├─ params.json          # Parameters + MIDI schema
-│  ├─ output.json          # Output routing & hotkeys
-│  ├─ output_ndi.json      # NDI-specific configuration
-│  └─ shaders/
-│     ├─ default.frag
-│     └─ present.frag
-├─ build.rs                # Native linking & platform logic
-└─ Cargo.toml
-```
-
----
-
-## Dependencies
-
-### Rust Crates
-
-- `glow` — OpenGL bindings
-- `winit` / `glutin` — windowing + GL context
-- `midir` — MIDI input
-- `serde` / `serde_json` — configuration parsing
-
-### Native APIs
-
-- OpenGL
-- Cocoa / AppKit (macOS)
-- CoreMIDI
-- Syphon (vendored)
-- Spout2 (vendored)
-
----
-
-## How It Works
-
-### 1. OpenGL Rendering
-
-- A window and GL context are created with `winit` + `glutin`
-- A fullscreen triangle is rendered every frame
-- All visuals are produced in the fragment shader
-
-### 2. Shader Uniforms
-
-Built-in uniforms:
-
-- `u_time` — seconds since start
-- `u_resolution` — framebuffer resolution
-
-Plus:
-- user-defined parameters from JSON
-- live-updated MIDI values
-
-### 3. Render Target
-
-- Rendering occurs into an offscreen framebuffer
-- The framebuffer texture is:
-  - drawn to the preview window
-  - shared with Syphon, Spout, Stream, or NDI depending on mode
-
----
-
 ## Parameters & MIDI
 
-Parameters are defined declaratively in JSON.
+Parameters are defined declaratively in JSON and updated every frame.
 
-```json
-{
-  "version": 1,
-  "params": [
-    {
-      "name": "speed",
-      "ty": "float",
-      "min": 0.0,
-      "max": 5.0,
-      "default": 1.0,
-      "midi_cc": 1
-    }
-  ]
-}
-```
-
-Behavior:
-
-- MIDI CC values (0–127) are normalized
-- Values are mapped into parameter ranges
-- Parameters update every frame
-- No hidden smoothing or automation
-
-Controller layouts are portable and reproducible.
-
----
-
-## Use Cases
-
-- Live shader performance
-- Visual instruments
-- Generative installations
-- Feedback-based video systems
-- Custom GPU tools for OBS, Resolume, TouchDesigner pipelines
-
----
-
-## Roadmap
-
-- Shader hot-reloading
-- Multi-pass rendering / feedback buffers
-- `.app` / `.exe` packaging
-- OSC / network control
-- Expanded NDI configuration options
-
----
-
-## Philosophy
-
-`shadecore` is intentionally **minimal, explicit, and opinionated**.
-
-It does not try to be a framework.  
-It does not hide the GPU.  
-
-It exists to give you **direct ownership of the rendering pipeline** and let the software grow into whatever tool you need.
-
----
-
-## License
-
-TBD
+By declaring parameters and MIDI bindings ahead of time, `shadecore`
+supports a live-coding style where control surfaces can be connected,
+repurposed, or reinterpreted in real time without stopping the renderer.
