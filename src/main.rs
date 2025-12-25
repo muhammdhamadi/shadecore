@@ -2580,10 +2580,12 @@ let mut stream = StreamSender::new(stream_cfg.clone());
                                         WindowEvent::KeyboardInput { event, .. } => {
                         if event.state.is_pressed() && !event.repeat {
                             if let PhysicalKey::Code(code) = event.physical_key {
-                                println!("[key] pressed: {:?}", code);
+	                                // Global key logging for debugging hotkey routing & conflicts.
+	                                println!("[input] key pressed: {:?}", code);
 
                                 // --- Profile hotkeys (params.json) ---
-                                if let Some(pact) = profile_hotkeys.get(&code).cloned() {
+	                                if let Some(pact) = profile_hotkeys.get(&code).cloned() {
+	                                    println!("[params] hotkey: {:?} -> {:?}", code, pact);
                                     if profile_names.is_empty() {
                                         println!("[params] no profiles defined");
                                     } else {
@@ -2704,13 +2706,14 @@ if let Some(action) = recording_hotkeys.get(&code).copied() {
                                     return;
                                 }
 
-                                let new_mode = hotkey_map.get(&code).copied();
+	                                let new_mode = hotkey_map.get(&code).copied();
                                 if let Some(m) = new_mode {
+	                                    println!("[output] hotkey pressed: {:?} -> {:?}", code, m);
                                     if output_mode == OutputMode::Stream && m != OutputMode::Stream { stream.stop(); }
                                     if output_mode == OutputMode::Ndi && m != OutputMode::Ndi { ndi.stop(); }
                                     output_mode = m;
                                     warned = false;
-                                    println!("[output] switched -> {:?}", output_mode);
+	                                    println!("[output] switched -> {:?}", output_mode);
                                     window.set_title(&format!(
                                         "shadecore - output: {:?} (press 1=Texture, 2=Syphon, 3=Spout, 4=Stream, 6=NDI)",
                                         output_mode
@@ -2730,11 +2733,14 @@ if let Some(action) = recording_hotkeys.get(&code).copied() {
                                 _ => None,
                             };
 
-
-                            if let Some(pm) = new_preview_mode {
+	                            if let Some(pm) = new_preview_mode {
                                 if pm != preview_scale_mode {
                                     preview_scale_mode = pm;
-                                    println!("[preview] scale mode -> {} (0=fit, 1=fill, 2=stretch, 3=pixel)", preview_scale_mode);
+	                                    println!(
+	                                        "[preview] hotkey pressed: {:?} -> scale_mode={} (0=fit, 1=fill, 2=stretch, 3=pixel)",
+	                                        event.physical_key,
+	                                        preview_scale_mode
+	                                    );
                                 }
                             }
                         }
