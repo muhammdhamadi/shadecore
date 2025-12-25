@@ -291,6 +291,7 @@ fn parse_keycode(name: &str) -> Option<KeyCode> {
         "Insert" => Some(KeyCode::Insert),
         "PageUp" => Some(KeyCode::PageUp),
         "KeyT" => Some(KeyCode::KeyT),
+        "KeyR" => Some(KeyCode::KeyR),
         "KeyS" => Some(KeyCode::KeyS),
 
         // Profile switching defaults / common picks
@@ -2044,6 +2045,31 @@ fn set_u_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i3
     }
 }
 
+
+
+fn set_u_src_resolution(gl: &glow::Context, prog: glow::NativeProgram, w: i32, h: i32) {
+    unsafe {
+        if let Some(loc) = gl.get_uniform_location(prog, "u_src_resolution") {
+            gl.uniform_2_f32(Some(&loc), w as f32, h as f32);
+        }
+        if let Some(loc) = gl.get_uniform_location(prog, "uSrcResolution") {
+            gl.uniform_2_f32(Some(&loc), w as f32, h as f32);
+        }
+        if let Some(loc) = gl.get_uniform_location(prog, "iResolution_src") {
+            gl.uniform_3_f32(Some(&loc), w as f32, h as f32, 1.0);
+        }
+    }
+}
+
+fn set_u_scale_mode(gl: &glow::Context, prog: glow::NativeProgram, mode: i32) {
+    unsafe {
+        for name in ["u_scale_mode", "uScaleMode"] {
+            if let Some(loc) = gl.get_uniform_location(prog, name) {
+                gl.uniform_1_i32(Some(&loc), mode);
+            }
+        }
+    }
+}
 fn set_u_time(gl: &glow::Context, prog: glow::NativeProgram, t: f32) {
     unsafe {
         for name in ["u_time", "uTime", "iTime", "time"] {
@@ -2430,6 +2456,9 @@ println!(
     recording_cfg.ffmpeg_path
 );
 let mut recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
+
+    // Render target is defined by recording.json (deterministic output). Preview window just scales this texture.
+    unsafe { resize_render_target(&gl, &mut rt, recording_cfg.width as i32, recording_cfg.height as i32); }
     let syphon_name = output_cfg
         .syphon
         .server_name
@@ -2457,6 +2486,10 @@ let mut recording_hotkeys = build_recording_hotkey_map(&recording_cfg);
     let hotkey_map = build_hotkey_map(&output_cfg.hotkeys);
 
     let mut output_mode = output_cfg.output_mode;
+
+    // Preview scaling mode (presentation only; does NOT affect recording/FBO size)
+    // 0=fit (letterbox), 1=fill (crop), 2=stretch, 3=pixel (1:1 centered)
+    let mut preview_scale_mode: i32 = 0;
 
     println!(
         "[output] startup mode={:?} | syphon.enabled={} name='{}' | spout.enabled={} name='{}' invert={} | stream.enabled={} target={:?} | ndi.enabled={} name='{}'",
@@ -2684,20 +2717,48 @@ if let Some(action) = recording_hotkeys.get(&code).copied() {
                                     ));
                                 }
                             }
+
+
+                            // --- Preview scaling hotkeys (presentation only) ---
+                            // Uses 7/8/9/0 (digit or numpad) to avoid clashing with output hotkeys.
+                            // 7=FIT, 8=FILL, 9=STRETCH, 0=PIXEL (1:1 centered)
+                            let new_preview_mode: Option<i32> = match event.physical_key {
+                                PhysicalKey::Code(KeyCode::Digit7) | PhysicalKey::Code(KeyCode::Numpad7) => Some(0),
+                                PhysicalKey::Code(KeyCode::Digit8) | PhysicalKey::Code(KeyCode::Numpad8) => Some(1),
+                                PhysicalKey::Code(KeyCode::Digit9) | PhysicalKey::Code(KeyCode::Numpad9) => Some(2),
+                                PhysicalKey::Code(KeyCode::Digit0) | PhysicalKey::Code(KeyCode::Numpad0) => Some(3),
+                                _ => None,
+                            };
+
+
+                            if let Some(pm) = new_preview_mode {
+                                if pm != preview_scale_mode {
+                                    preview_scale_mode = pm;
+                                    println!("[preview] scale mode -> {} (0=fit, 1=fill, 2=stretch, 3=pixel)", preview_scale_mode);
+                                }
+                            }
                         }
                     }
 
-                    WindowEvent::Resized(new_size) => unsafe {
-                        resize_render_target(&gl, &mut rt, new_size.width as i32, new_size.height as i32);
+                    WindowEvent::Resized(new_size) => {
+                        // Preview window is resizable; render target stays fixed (recording resolution).
+                        let w = new_size.width.max(1);
+                        let h = new_size.height.max(1);
+                        unsafe {
+                            gl_surface.resize(&gl_context, NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap());
+                        }
+                        window.request_redraw();
                     },
 
                     WindowEvent::RedrawRequested => unsafe {
-                        let size = window.inner_size();
-                        let w = size.width as i32;
-                        let h = size.height as i32;
-                        resize_render_target(&gl, &mut rt, w, h);
+                        let win_size = window.inner_size();
+                        let win_w = win_size.width as i32;
+                        let win_h = win_size.height as i32;
 
-                        if let Ok(mut s) = store.lock() {
+                        // Authoritative render size (used for uniforms, outputs, and recording).
+                        let w = rt.w;
+                        let h = rt.h;
+if let Ok(mut s) = store.lock() {
                             s.tick();
                         }
 
@@ -2940,14 +3001,17 @@ if recorder.is_recording() {
                             }
                         }
 
-                        gl.viewport(0, 0, w, h);
+                        gl.viewport(0, 0, win_w, win_h);
                         gl.clear_color(0.02, 0.02, 0.02, 1.0);
                         gl.clear(glow::COLOR_BUFFER_BIT);
 
                         gl.use_program(Some(present_program));
                         gl.bind_vertex_array(Some(vao));
 
-                        set_u_resolution(&gl, present_program, w, h);
+                        set_u_resolution(&gl, present_program, win_w, win_h);
+                        set_u_src_resolution(&gl, present_program, w, h);
+                        // 0=fit (letterbox), 1=fill (crop), 2=stretch, 3=pixel (centered)
+                        set_u_scale_mode(&gl, present_program, preview_scale_mode);
 
                         if let Some(loc) = gl.get_uniform_location(present_program, "u_tex") {
                             gl.uniform_1_i32(Some(&loc), 0);
@@ -3085,10 +3149,12 @@ if recorder.is_recording() {
                             pending_reload = true;
                             println!("[recording] config changed on disk; will reload after stop");
                         } else {
-                            let rec_path = assets.join("recording.json");
+                            let rec_path = recording_cfg_path.clone();
                             let new_cfg = load_recording_config(&rec_path);
                             recording_hotkeys = build_recording_hotkey_map(&new_cfg);
                             recorder.set_cfg(new_cfg.clone());
+                        unsafe { resize_render_target(&gl, &mut rt, new_cfg.width as i32, new_cfg.height as i32); }
+                            unsafe { resize_render_target(&gl, &mut rt, new_cfg.width as i32, new_cfg.height as i32); }
                             rec_rt = None;
                             rec_pbos = None;
                             rec_pbo_bytes = 0;
@@ -3107,7 +3173,7 @@ if recorder.is_recording() {
                     }
                     if pending_reload && !recorder.is_recording() {
                         pending_reload = false;
-                        let rec_path = assets.join("recording.json");
+                        let rec_path = recording_cfg_path.clone();
                         let new_cfg = load_recording_config(&rec_path);
                         recording_hotkeys = build_recording_hotkey_map(&new_cfg);
                         recorder.set_cfg(new_cfg.clone());

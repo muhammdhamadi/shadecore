@@ -108,10 +108,10 @@ fn default_toggle_keys() -> Vec<String> {
     vec![]
 }
 fn default_start_keys() -> Vec<String> {
-    vec!["Numpad9".into()]
+    vec!["KeyR".into()]
 }
 fn default_stop_keys() -> Vec<String> {
-    vec!["Numpad0".into()]
+    vec!["KeyS".into()]
 }
 
 fn default_out_dir() -> PathBuf {
